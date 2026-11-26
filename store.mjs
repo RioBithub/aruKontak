@@ -7,6 +7,7 @@ import { agentStates, assignmentEvents, migrateRouting, recordAssignment, routeW
 
 const initialAgents = ['Igun', 'Meri', 'Lingga'];
 const staffFields = 'id, username, name, role, password_hash AS passwordHash, temporary';
+const visitorFields = 'id, visitor_name AS name, closed_at AS closedAt, bot_pending AS botPending, bot_menu AS botMenu';
 const chatSummary = `
   SELECT c.id, c.visitor_name AS name, c.assignee_id AS assigneeId, a.name AS agentName,
          c.closed_at AS closedAt, c.updated_at AS updatedAt,
@@ -18,7 +19,7 @@ const chatSummary = `
 `;
 const visitorSummary = `
   SELECT c.id, c.visitor_name AS name, c.access_code AS code, c.closed_at AS closedAt,
-         c.bot_pending AS botPending, a.name AS agentName
+         c.bot_pending AS botPending, c.bot_menu AS botMenu, a.name AS agentName
   FROM chats c LEFT JOIN users a ON a.id = c.assignee_id
 `;
 
@@ -27,13 +28,17 @@ function chatCode() {
 }
 
 function migrateChats(db) {
-  if (db.prepare('PRAGMA user_version').get().user_version < 2) {
+  const { user_version: version } = db.prepare('PRAGMA user_version').get();
+  if (version < 2) {
     db.exec(`
       ALTER TABLE chats ADD COLUMN access_code TEXT;
       ALTER TABLE chats ADD COLUMN bot_pending INTEGER NOT NULL DEFAULT 0 CHECK (bot_pending IN (0, 1));
       CREATE UNIQUE INDEX chats_by_access_code ON chats(access_code);
       PRAGMA user_version = 2;
     `);
+  }
+  if (version < 3) {
+    db.exec('ALTER TABLE chats ADD COLUMN bot_menu TEXT; PRAGMA user_version = 3;');
   }
   const setCode = db.prepare('UPDATE chats SET access_code = ? WHERE id = ?');
   for (const { id } of db.prepare('SELECT id FROM chats WHERE access_code IS NULL').all()) {
@@ -238,6 +243,8 @@ export function getRules(db) {
   const rules = JSON.parse(db.prepare('SELECT rules FROM reply_settings WHERE id = 1').get().rules);
   return {
     ...rules,
+    mode: rules.mode ?? defaultRules.mode,
+    menu: rules.menu ?? defaultRules.menu,
     handoff: rules.handoff ?? 'immediate',
     keywords: rules.keywords.map(rule => ({ match: 'contains', handoff: false, ...rule })),
   };
@@ -247,7 +254,8 @@ export function saveRules(db, rules) {
   return transaction(db, () => {
     db.prepare('UPDATE reply_settings SET rules = ? WHERE id = 1').run(JSON.stringify(rules));
     if (rules.handoff !== 'immediate') return [];
-    const released = db.prepare('UPDATE chats SET bot_pending = 0 WHERE bot_pending = 1 AND closed_at IS NULL RETURNING id').all();
+    const released = db.prepare(`UPDATE chats SET bot_pending = 0
+      WHERE bot_pending = 1 AND bot_menu IS NULL AND closed_at IS NULL RETURNING id`).all();
     if (released.length) routeWaitingChats(db);
     return released.map(chat => chat.id);
   });
@@ -275,8 +283,10 @@ export function visitorChatId(db, { key, code, id }) {
 
 function visitorThread(db, id) {
   if (!id) return null;
-  const chat = db.prepare(`${visitorSummary} WHERE c.id = ?`).get(id);
-  return { ...chat, botPending: Boolean(chat.botPending), messages: messagesFor(db, id) };
+  const { botMenu, ...chat } = db.prepare(`${visitorSummary} WHERE c.id = ?`).get(id);
+  const choices = botMenu && chat.botPending && !chat.closedAt
+    ? JSON.parse(botMenu).choices.map(({ code, label }) => ({ code, label })) : [];
+  return { ...chat, botPending: Boolean(chat.botPending), choices, messages: messagesFor(db, id) };
 }
 
 export function visitorChat(db, access) {
@@ -284,8 +294,9 @@ export function visitorChat(db, access) {
 }
 
 function addVisitorMessage(db, chat, body, requestKey, now, rules, isNewChat = false) {
-  const { id, name, botPending } = chat;
-  const { replies, handoff } = automationFor(rules, body, { isNewChat, botPending, now: new Date(now) });
+  const { id, name, botPending, botMenu } = chat;
+  const menu = botMenu ? JSON.parse(botMenu) : null;
+  const { replies, handoff } = automationFor(rules, body, { isNewChat, botPending, now: new Date(now), menu });
   const insertMessage = db.prepare('INSERT INTO messages (chat_id, sender, sender_name, body, created_at, request_key) VALUES (?, ?, ?, ?, ?, ?)');
   insertMessage.run(id, 'visitor', name, body, now, requestKey);
   for (const reply of replies) insertMessage.run(id, 'auto', 'JRCare', reply, now, null);
@@ -301,17 +312,17 @@ export function startChat(db, visitorKey, name, body, requestKey) {
 
     const now = Date.now();
     const rules = getRules(db);
-    const active = db.prepare(`SELECT id, visitor_name AS name, bot_pending AS botPending
-      FROM chats WHERE visitor_key = ? AND closed_at IS NULL`).get(visitorKey);
+    const active = db.prepare(`SELECT ${visitorFields} FROM chats WHERE visitor_key = ? AND closed_at IS NULL`).get(visitorKey);
     if (active) {
       addVisitorMessage(db, active, body, requestKey, now, rules);
       return visitorThread(db, active.id);
     }
 
-    const botPending = rules.handoff !== 'immediate';
-    const { lastInsertRowid: id } = db.prepare(`INSERT INTO chats (visitor_key, visitor_name, updated_at, access_code, bot_pending)
-      VALUES (?, ?, ?, ?, ?)`).run(visitorKey, name, now, chatCode(), Number(botPending));
-    addVisitorMessage(db, { id, name, botPending }, body, requestKey, now, rules, true);
+    const botMenu = rules.mode === 'two-message' ? JSON.stringify(rules.menu) : null;
+    const botPending = Boolean(botMenu) || rules.handoff !== 'immediate';
+    const { lastInsertRowid: id } = db.prepare(`INSERT INTO chats (visitor_key, visitor_name, updated_at, access_code, bot_pending, bot_menu)
+      VALUES (?, ?, ?, ?, ?, ?)`).run(visitorKey, name, now, chatCode(), Number(botPending), botMenu);
+    addVisitorMessage(db, { id, name, botPending, botMenu }, body, requestKey, now, rules, true);
     return visitorThread(db, id);
   });
 }
@@ -319,8 +330,7 @@ export function startChat(db, visitorKey, name, body, requestKey) {
 export function postVisitorMessage(db, access, id, body, requestKey) {
   return transaction(db, () => {
     if (visitorChatId(db, { ...access, id }) !== id) return 'missing';
-    const chat = db.prepare(`SELECT id, visitor_name AS name, closed_at AS closedAt, bot_pending AS botPending
-      FROM chats WHERE id = ?`).get(id);
+    const chat = db.prepare(`SELECT ${visitorFields} FROM chats WHERE id = ?`).get(id);
     if (db.prepare("SELECT 1 FROM messages WHERE chat_id = ? AND sender = 'visitor' AND request_key = ?")
       .get(id, requestKey)) return 'ok';
     if (chat.closedAt) return 'closed';

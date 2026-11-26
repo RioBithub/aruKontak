@@ -22,7 +22,9 @@ function desk(t) {
   let nextVisitor = 0;
   const visitor = () => {
     const key = `visitor-${++nextVisitor}`;
-    return store.startChat(db, key, 'Pengunjung Uji', 'Halo', key).id;
+    const chat = store.startChat(db, key, 'Pengunjung Uji', 'Halo', key);
+    store.postVisitorMessage(db, { key }, chat.id, '1', 'choose');
+    return chat.id;
   };
   const chat = id => store.inbox(db, admin, id).chat;
   return { db, admin, igun, meri, ready, visitor, chat };

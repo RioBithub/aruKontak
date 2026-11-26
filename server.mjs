@@ -371,7 +371,8 @@ async function writeApi(request, response, path, body, changedChats) {
     case '/api/staff/rules': {
       requireStaff(request, { admin: true });
       let rules;
-      try { rules = validateRules(body); } catch (error) { throw new HttpError(400, error.message); }
+      try { rules = validateRules({ ...store.getRules(db), ...body }); }
+      catch (error) { throw new HttpError(400, error.message); }
       for (const id of store.saveRules(db, rules)) changedChats.add(id);
       return { rules };
     }

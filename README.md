@@ -19,7 +19,7 @@ Simpan hasil perintah sebagai `JRCARE_SETUP_TOKEN` di `.env`, lalu jalankan `npm
 
 1. Admin membuka **Akun agen**. Igun (`igun`), Meri (`meri`), dan Lingga (`lingga`) tersedia sejak penyiapan. Admin juga bisa menambahkan agen lewat **Buat akun**.
 2. Admin memilih **Buat sandi sementara** dan menyampaikan kredensial ke agen. Agen masuk dengan sandi sementara lalu memilih sandi tetap.
-3. Bagikan URL halaman utama melalui tombol **Salin tautan pelanggan**. Pesan masuk mendapat agen otomatis atau menunggu di **Kotak masuk → Antrean**.
+3. Bagikan URL halaman utama melalui tombol **Salin tautan pelanggan**. Setelah balasan bot kedua, chat mendapat agen otomatis atau menunggu di **Kotak masuk → Antrean**.
 4. Agen melihat, membalas, dan menyelesaikan chat yang ditugaskan kepadanya. Admin bisa melihat dan membalas semua chat, mengganti agen, menahan chat, dan membuka **Riwayat penugasan**.
 
 ## Penugasan otomatis
@@ -32,11 +32,11 @@ Jika portal tidak mengirim sinyal selama 90 detik, agen dianggap offline. Chat o
 
 ## Balasan otomatis
 
-Admin dapat mengubah pengaturan di **Balasan otomatis**. Sapaan awal aktif sejak penyiapan. Pesan di luar jam layanan dapat diaktifkan dengan hari dan jam layanan dalam WIB. Bila berlaku, pesan ini menggantikan sapaan pada awal chat.
+Alur awal mengirim dua balasan otomatis. Chat baru menerima sapaan dan pilihan layanan dalam satu pesan. Pilihan layanan atau pertanyaan berikutnya memicu satu pesan berisi format data dan pesan tunggu. Pada saat itu chat masuk antrean agen. Pelanggan bisa langsung melengkapi data atau meneruskan obrolan dengan petugas.
 
-Di **Menu dan penerusan ke agen**, pilih pencocokan **Sama persis** untuk jawaban seperti `1` atau `0`, atau pilih kata atau frasa yang perlu ada dalam pesan. JRCare menjalankan aturan pertama yang cocok. Setiap aturan dapat membalas saja atau membalas dan meneruskan chat ke antrean agen. **Pakai contoh menu** mengisi contoh yang dapat disunting sebelum disimpan.
+Di **Balasan otomatis**, admin dapat menyunting sapaan, kode pilihan, nama layanan, format data per pilihan, format untuk pertanyaan lain, dan pesan tunggu. Pilihan yang sudah ditampilkan berlaku sampai petugas mengambil alih atau chat selesai. Pesan di luar jam layanan ditambahkan ke balasan pertama jika aktif. Jam layanan memakai WIB.
 
-Chat dapat masuk antrean sejak pesan pertama atau menunggu di balasan otomatis sampai ada aturan penerusan. Admin juga dapat memilih agar pertanyaan yang tidak cocok langsung masuk antrean. Dalam alur yang menunggu penerusan, balasan aturan berhenti setelah chat masuk antrean agar agen dapat melanjutkan percakapan.
+Mode **Aturan kata kunci** menyediakan balasan berdasarkan pencocokan persis atau kata dan frasa dalam pesan, dengan penerusan sesuai aturan. Jika pesan di luar jam layanan aktif pada mode ini, pesan tersebut menggantikan sapaan awal.
 
 ## Menjalankan di VPS
 

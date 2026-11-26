@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { defaultRules, validateRules } from '../rules.mjs';
+import { defaultMenu, defaultRules, validateRules } from '../rules.mjs';
 import * as store from '../store.mjs';
 
 function session(hash) {
@@ -19,11 +19,16 @@ test('backfills stable links for existing chats and keeps codes out of the inbox
     rmSync(directory, { recursive: true, force: true });
   });
   const admin = store.setupAdmin(db, 'hash', session('admin'));
+  store.saveRules(db, { ...defaultRules, mode: 'custom' });
   const chat = store.startChat(db, 'original-browser', 'Pengunjung', 'Pesan sebelum pembaruan', 'legacy');
+  db.prepare('UPDATE reply_settings SET rules = ? WHERE id = 1').run(JSON.stringify({
+    welcome: defaultRules.welcome, away: defaultRules.away, keywords: [],
+  }));
   db.exec(`
     DROP INDEX chats_by_access_code;
     ALTER TABLE chats DROP COLUMN access_code;
     ALTER TABLE chats DROP COLUMN bot_pending;
+    ALTER TABLE chats DROP COLUMN bot_menu;
     PRAGMA user_version = 1;
   `);
   db.close();
@@ -32,7 +37,9 @@ test('backfills stable links for existing chats and keeps codes out of the inbox
   db = store.openStore(filename);
   const restored = store.visitorChat(db, { key: 'original-browser' });
   assert.match(restored.code, /^[a-f0-9]{32}$/);
+  assert.equal(store.getRules(db).mode, 'two-message');
   assert.equal(restored.messages[0].body, 'Pesan sebelum pembaruan');
+  assert.deepEqual(restored.choices, []);
   assert.equal(Object.hasOwn(store.inbox(db, admin, chat.id).chat, 'code'), false);
   db.close();
   db = null;
@@ -55,7 +62,7 @@ test('restores the exact closed chat after a new chat starts and only lets its o
   const closed = store.visitorChat(db, { code: first.code });
   assert.equal(closed.id, first.id);
   assert.ok(closed.closedAt);
-  assert.equal(closed.messages.at(-1).body, 'Dari browser lain');
+  assert.equal(closed.messages.filter(message => message.sender === 'visitor').at(-1).body, 'Dari browser lain');
   assert.deepEqual(store.visitorHistory(db, 'visitor').map(item => item.code), [next.code, first.code]);
   assert.deepEqual(store.visitorHistory(db, 'different-browser'), []);
   assert.equal(store.postVisitorMessage(db, { code: first.code }, first.id, 'Terlambat', 'late'), 'closed');
@@ -73,6 +80,7 @@ test('waits for a handoff rule, assigns an available agent, and stops replying a
   store.updatePresence(db, igun.id, 'igun');
   store.saveRules(db, validateRules({
     ...defaultRules,
+    mode: 'custom',
     handoff: 'rules',
     keywords: [
       { keyword: '1', match: 'exact', text: 'Balasan pilihan 1' },
@@ -100,4 +108,73 @@ test('waits for a handoff rule, assigns an available agent, and stops replying a
   assert.equal(thread().messages.filter(message => message.body === 'Meneruskan ke agen').length, 1);
   send('1', 'after-handoff');
   assert.equal(thread().messages.at(-1).sender, 'visitor');
+});
+
+test('sends two bot messages for the selected service and assigns only after the second', t => {
+  const db = store.openStore(':memory:');
+  t.after(() => db.close());
+  const admin = store.setupAdmin(db, 'hash', session('admin'));
+  const agent = store.staffByUsername(db, 'igun');
+  store.setAgentPassword(db, agent.id, 'temporary');
+  store.replaceTemporaryPassword(db, store.staffByUsername(db, 'igun'), 'permanent', session('igun'));
+  store.updatePresence(db, agent.id, 'igun');
+
+  const chat = store.startChat(db, 'visitor', 'Pengunjung', '2', 'start');
+  const access = { code: chat.code };
+  const thread = () => store.visitorChat(db, access);
+  const bot = () => thread().messages.filter(message => message.sender === 'auto');
+  assert.deepEqual(chat.choices.map(choice => choice.code), defaultMenu.choices.map(choice => choice.code));
+  assert.equal(bot().length, 1);
+  assert.ok(bot()[0].body.includes(defaultMenu.greeting));
+  assert.ok(bot()[0].body.includes(defaultMenu.choices[1].label));
+  assert.equal(store.inbox(db, admin, chat.id).chat.routingState, 'bot');
+  assert.equal(store.inbox(db, agent, chat.id).chat, null);
+
+  const updated = structuredClone(defaultRules);
+  const chosen = defaultMenu.choices[1];
+  updated.menu.choices[1].code = '99';
+  updated.menu.choices[1].prompt = 'Format baru';
+  store.saveRules(db, validateRules(updated));
+  assert.equal(thread().choices[1].code, chosen.code);
+
+  assert.equal(store.postVisitorMessage(db, access, chat.id, `Nomor ${chosen.code}.`, 'choose'), 'ok');
+  assert.equal(store.postVisitorMessage(db, access, chat.id, `Nomor ${chosen.code}.`, 'choose'), 'ok');
+  assert.equal(bot().length, 2);
+  assert.ok(bot()[1].body.includes(chosen.prompt));
+  assert.ok(bot()[1].body.includes(defaultMenu.waiting));
+  assert.equal(store.inbox(db, agent, chat.id).chat.routingState, 'auto');
+  assert.deepEqual(thread().choices, []);
+
+  store.postVisitorMessage(db, access, chat.id, 'Data setelah penugasan', 'detail');
+  store.postStaffMessage(db, agent, chat.id, 'Balasan petugas', 'agent-reply');
+  store.closeChat(db, agent, chat.id);
+  assert.equal(bot().length, 2);
+  assert.ok(thread().closedAt);
+});
+
+test('combines notice and menu outside opening hours and queues free-text requests', t => {
+  const db = store.openStore(':memory:');
+  t.after(() => db.close());
+  const admin = store.setupAdmin(db, 'hash', session('admin'));
+  const weekday = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', weekday: 'short' });
+  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const today = days.indexOf(weekday.format(new Date())) + 1;
+  const rules = { ...defaultRules, away: { ...defaultRules.away, enabled: true, days: [(today + 2) % 7 + 1] } };
+  store.saveRules(db, validateRules(rules));
+  const chat = store.startChat(db, 'visitor', 'Pengunjung', 'Halo', 'start');
+  assert.deepEqual(chat.messages.map(message => message.sender), ['visitor', 'auto']);
+  assert.ok(chat.messages[1].body.includes(rules.away.text));
+
+  const access = { code: chat.code };
+  store.postVisitorMessage(db, access, chat.id, 'Ada yang ingin saya tanyakan', 'free-text');
+  const result = store.visitorChat(db, access);
+  assert.deepEqual(result.messages.map(message => message.sender), ['visitor', 'auto', 'visitor', 'auto']);
+  assert.equal(result.messages.at(-1).body, `${defaultMenu.fallback}\n\n${defaultMenu.waiting}`);
+  assert.equal(store.inbox(db, admin, chat.id).chat.routingState, 'queued');
+
+  const other = store.startChat(db, 'other-browser', 'Pengunjung Lain', 'Halo', 'start');
+  const choice = defaultMenu.choices[0];
+  store.postVisitorMessage(db, { key: 'other-browser' }, other.id, `Saya mau bertanya tentang ${choice.label}.`, 'message');
+  const lastReply = store.visitorChat(db, { key: 'other-browser' }).messages.at(-1);
+  assert.equal(lastReply.body, `${choice.label}\n${choice.prompt}\n\n${defaultMenu.waiting}`);
 });

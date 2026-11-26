@@ -2,6 +2,8 @@ import { api, byId, element, followUpdates, notice, postMessage, renderMessages,
 
 const startForm = byId('start-form');
 const replyForm = byId('visitor-reply');
+const choicePanel = byId('visitor-choices');
+const messageInput = byId('visitor-message');
 const status = byId('visitor-status');
 const feedback = byId('visitor-error');
 const panel = byId('customer-chat');
@@ -32,10 +34,28 @@ function parseCode(value) {
   return null;
 }
 
+function renderChoices(choices) {
+  const key = JSON.stringify(choices);
+  if (choicePanel.dataset.options !== key) {
+    const buttons = choices.map(({ code, label }) => {
+      const button = element('button', 'secondary small', `${code} — ${label}`);
+      button.type = 'button';
+      button.dataset.choice = code;
+      return button;
+    });
+    choicePanel.replaceChildren(...buttons);
+    choicePanel.dataset.options = key;
+  }
+  choicePanel.hidden = !choices.length;
+  for (const button of choicePanel.children) button.disabled = submitting;
+  messageInput.placeholder = choices.length ? 'Ketik kode pilihan atau tulis pertanyaan' : 'Tulis pesan Anda';
+}
+
 function render(forceScroll = false) {
+  const choices = chat?.choices ?? [];
   byId('visitor-loading').hidden = ready;
   byId('visitor-lookup').hidden = !viewingHistory;
-  byId('quick-topics').hidden = viewingHistory;
+  byId('quick-topics').hidden = viewingHistory || Boolean(choices.length);
   startForm.hidden = !ready || viewingHistory || Boolean(chat);
   byId('visitor-thread').hidden = !chat;
   if (chat) {
@@ -44,6 +64,7 @@ function render(forceScroll = false) {
     byId('visitor-closed').hidden = !chat.closedAt;
     renderMessages(byId('visitor-messages'), chat, 'visitor', forceScroll);
   }
+  renderChoices(choices);
   let state = 'loading';
   let label = 'Menyambungkan…';
   if (viewingHistory) {
@@ -60,7 +81,7 @@ function render(forceScroll = false) {
     label = `Ditangani oleh ${chat.agentName}`;
   } else if (chat?.botPending) {
     state = 'active';
-    label = 'Balasan otomatis';
+    label = choices.length ? 'Pilih layanan' : 'Balasan otomatis';
   } else if (chat) {
     state = 'waiting';
     label = 'Menunggu petugas';
@@ -165,13 +186,11 @@ async function refresh() {
   }
 }
 
-async function send(event, path, payload) {
-  event.preventDefault();
+async function send(form, path, payload, clearDraft = true) {
   if (submitting) return;
   readRequest?.abort();
   readRequest = null;
   submitting = true;
-  const form = event.currentTarget;
   const button = form.querySelector('[type="submit"]');
   const fields = [...form.querySelectorAll('input, textarea')];
   const buttonLabel = button.textContent;
@@ -183,9 +202,9 @@ async function send(event, path, payload) {
   render();
   try {
     const result = await postMessage(path, form, payload, code);
-    form.reset();
+    if (clearDraft) form.reset();
     showChat(result.chat, true);
-    if (!chat.closedAt) byId('visitor-message').focus();
+    if (!chat.closedAt) messageInput.focus();
   } catch (error) {
     notice(feedback, error.message, true);
   } finally {
@@ -199,14 +218,20 @@ async function send(event, path, payload) {
   }
 }
 
-startForm.addEventListener('submit', event => void send(event, '/api/visitor/chat', {
-  name: byId('visitor-name').value,
-  text: byId('visitor-first').value,
-}));
-replyForm.addEventListener('submit', event => void send(event, '/api/visitor/message', {
-  chatId: chat?.id,
-  text: byId('visitor-message').value,
-}));
+startForm.addEventListener('submit', event => {
+  event.preventDefault();
+  void send(startForm, '/api/visitor/chat', { name: byId('visitor-name').value, text: byId('visitor-first').value });
+});
+replyForm.addEventListener('submit', event => {
+  event.preventDefault();
+  void send(replyForm, '/api/visitor/message', { chatId: chat?.id, text: messageInput.value });
+});
+choicePanel.addEventListener('click', event => {
+  const choice = event.target.closest('[data-choice]');
+  if (choice && chat?.botPending) {
+    void send(replyForm, '/api/visitor/message', { chatId: chat.id, text: choice.dataset.choice }, false);
+  }
+});
 
 byId('lookup-form').addEventListener('submit', event => {
   event.preventDefault();

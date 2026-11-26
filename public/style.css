@@ -346,6 +346,8 @@ select {
 .visitor-reference p { color: var(--muted); font-size: .8125rem; font-weight: 700; }
 .visitor-reference code { color: var(--navy); overflow-wrap: anywhere; font-size: .875rem; }
 .visitor-thread .messages { flex: 1; min-height: 15rem; max-height: min(43vh, 28rem); }
+.visitor-choices { display: flex; flex-wrap: wrap; gap: .45rem; padding: .65rem .92rem; border-top: 1px solid var(--line); }
+.visitor-choices button { text-align: left; overflow-wrap: anywhere; }
 .closed-notice { display: flex; gap: .75rem; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: .88rem 1rem; border-top: 1px solid var(--line); }
 .closed-notice p { color: var(--muted); font-size: .9375rem; }
 
@@ -512,6 +514,7 @@ select {
 .capacity-form label { font-size: .875rem; }
 .rules-layout { max-width: 63rem; animation: arrive .28s ease-out both; }
 .rules-layout form { display: grid; gap: .86rem; margin-top: .94rem; }
+.automation-settings { display: grid; gap: .86rem; min-width: 0; padding: 0; margin: 0; border: 0; }
 .rules-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .68rem; }
 .check { display: inline-flex; align-items: center; gap: .46rem; width: fit-content; }
 .check input { flex: 0 0 auto; margin: 0; width: 1rem; height: 1rem; accent-color: var(--blue); }
@@ -536,6 +539,9 @@ select {
 .keyword-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .63rem; align-items: end; border-top: 1px solid var(--line); padding-top: .72rem; }
 .keyword-text { grid-column: span 2; }
 .keyword-row button { justify-self: end; }
+.menu-choice { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto; }
+.menu-choice .keyword-text { grid-column: 1 / -1; }
+.menu-choice button { grid-column: 3; grid-row: 1; }
 .password-dialog { padding: 1.35rem; width: min(calc(100% - 2rem), 28rem); color: var(--ink); }
 .password-dialog::backdrop { background: #092b4f91; }
 .password-dialog > p { margin-top: .58rem; }
@@ -583,6 +589,7 @@ select {
   .keyword-row { grid-template-columns: 1fr; }
   .keyword-text { grid-column: auto; }
   .keyword-row button { justify-self: start; }
+  .menu-choice button { grid-column: auto; grid-row: auto; }
 }
 
 @media (prefers-reduced-motion: reduce) {

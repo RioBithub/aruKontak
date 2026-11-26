@@ -146,15 +146,58 @@
       <section id="rules" class="rules-layout" aria-labelledby="rules-title" hidden>
         <h1 id="rules-title">Balasan otomatis</h1>
         <form id="rules-form" method="post" hidden>
-          <section class="panel settings-card form-stack" aria-labelledby="welcome-title">
-            <h2 id="welcome-title">Sapaan</h2>
-            <label class="check"><input id="welcome-enabled" type="checkbox"> Kirim sapaan pada chat baru</label>
-            <label for="welcome-text">Pesan sapaan</label>
-            <textarea id="welcome-text" rows="3" maxlength="1000"></textarea>
+          <section class="panel settings-card form-stack">
+            <label for="automation-mode">Alur balasan</label>
+            <select id="automation-mode">
+              <option value="two-message">Dua balasan + penugasan otomatis</option>
+              <option value="custom">Aturan kata kunci</option>
+            </select>
           </section>
+          <fieldset id="guided-settings" class="automation-settings" hidden disabled>
+            <legend class="sr-only">Alur dua balasan</legend>
+            <section class="panel settings-card form-stack" aria-labelledby="menu-greeting-title">
+              <h2 id="menu-greeting-title">1. Sapaan dan pilihan layanan</h2>
+              <label for="menu-greeting">Teks sapaan</label>
+              <textarea id="menu-greeting" rows="2" maxlength="1000" required></textarea>
+              <div id="menu-choices" class="keywords"></div>
+              <button id="add-choice" class="secondary" type="button">Tambah pilihan</button>
+            </section>
+            <section class="panel settings-card form-stack" aria-labelledby="menu-handoff-title">
+              <h2 id="menu-handoff-title">2. Format data dan penerusan ke agen</h2>
+              <p>Chat masuk antrean saat balasan kedua dikirim. Format data mengikuti pilihan pelanggan.</p>
+              <label for="menu-fallback">Format data untuk pertanyaan lain</label>
+              <textarea id="menu-fallback" rows="3" maxlength="1000" required></textarea>
+              <label for="menu-waiting">Pesan tunggu</label>
+              <textarea id="menu-waiting" rows="2" maxlength="1000" required></textarea>
+            </section>
+          </fieldset>
+          <fieldset id="custom-settings" class="automation-settings" hidden disabled>
+            <legend class="sr-only">Aturan kata kunci</legend>
+            <section class="panel settings-card form-stack" aria-labelledby="welcome-title">
+              <h2 id="welcome-title">Sapaan</h2>
+              <label class="check"><input id="welcome-enabled" type="checkbox"> Kirim sapaan pada chat baru</label>
+              <label for="welcome-text">Pesan sapaan</label>
+              <textarea id="welcome-text" rows="3" maxlength="1000"></textarea>
+            </section>
+            <section class="panel settings-card form-stack" aria-labelledby="keyword-title">
+              <h2 id="keyword-title">Menu dan penerusan ke agen</h2>
+              <label for="handoff-mode">Kapan chat masuk antrean agen?</label>
+              <select id="handoff-mode">
+                <option value="immediate">Sejak pesan pertama</option>
+                <option value="rules">Saat aturan meneruskan ke agen</option>
+                <option value="rules-or-unmatched">Saat aturan meneruskan atau pesan tidak cocok</option>
+              </select>
+              <p>Pakai “Sama persis” untuk pilihan angka seperti 1 atau 0. Aturan pertama yang cocok akan dijalankan.</p>
+              <div id="keywords" class="keywords"></div>
+              <div class="rules-actions">
+                <button id="add-keyword" class="secondary small" type="button">Tambah aturan</button>
+                <button id="example-menu" class="secondary small" type="button">Pakai contoh menu</button>
+              </div>
+            </section>
+          </fieldset>
           <section class="panel settings-card form-stack" aria-labelledby="away-title">
             <h2 id="away-title">Di luar jam layanan</h2>
-            <p>Di luar jam yang dipilih, pesan ini menggantikan sapaan pada chat baru.</p>
+            <p id="away-hint"></p>
             <label class="check"><input id="away-enabled" type="checkbox"> Kirim pesan di luar jam layanan</label>
             <fieldset class="days" id="open-days">
               <legend>Hari layanan</legend>
@@ -172,21 +215,6 @@
             </div>
             <label for="away-text">Pesan di luar jam layanan</label>
             <textarea id="away-text" rows="3" maxlength="1000"></textarea>
-          </section>
-          <section class="panel settings-card form-stack" aria-labelledby="keyword-title">
-            <h2 id="keyword-title">Menu dan penerusan ke agen</h2>
-            <label for="handoff-mode">Kapan chat masuk antrean agen?</label>
-            <select id="handoff-mode">
-              <option value="immediate">Sejak pesan pertama</option>
-              <option value="rules">Saat aturan meneruskan ke agen</option>
-              <option value="rules-or-unmatched">Saat aturan meneruskan atau pesan tidak cocok</option>
-            </select>
-            <p>Pakai “Sama persis” untuk pilihan angka seperti 1 atau 0. Aturan pertama yang cocok akan dijalankan.</p>
-            <div id="keywords" class="keywords"></div>
-            <div class="rules-actions">
-              <button id="add-keyword" class="secondary small" type="button">Tambah aturan</button>
-              <button id="example-menu" class="secondary small" type="button">Pakai contoh menu</button>
-            </div>
           </section>
           <div class="rules-actions">
             <button class="primary" type="submit">Simpan balasan otomatis</button>
@@ -209,6 +237,14 @@
         <button class="secondary" type="submit">Tutup</button>
       </form>
     </dialog>
+    <template id="choice-template">
+      <article class="keyword-row menu-choice">
+        <label>Kode pilihan<input class="choice-code" maxlength="32" required></label>
+        <label>Nama layanan<input class="choice-label" maxlength="72" required></label>
+        <label class="keyword-text">Format data<textarea class="choice-prompt" rows="3" maxlength="1000" required></textarea></label>
+        <button class="secondary small remove-choice" type="button">Hapus pilihan</button>
+      </article>
+    </template>
     <template id="keyword-template">
       <article class="keyword-row">
         <label>Pemicu<input class="keyword-word" maxlength="64" required></label>

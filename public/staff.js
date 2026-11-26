@@ -341,6 +341,7 @@ function endSession(message = 'Sesi berakhir. Silakan masuk kembali.') {
   byId('assignment-events').replaceChildren();
   delete byId('assignment-history').dataset.version;
   byId('keywords').replaceChildren();
+  byId('menu-choices').replaceChildren();
   for (const id of ['staff-reply', 'agent-form', 'routing-form', 'rules-form']) byId(id).reset();
   if (dialog.open) dialog.close();
   showSession(null);
@@ -660,7 +661,40 @@ function addKeyword({ keyword = '', text = '', match = 'exact', handoff = false 
   return row;
 }
 
-function fillRules({ welcome, away, handoff, keywords }) {
+function updateChoiceControls() {
+  const rows = byId('menu-choices').children;
+  byId('add-choice').disabled = rows.length >= 20;
+  for (const row of rows) row.querySelector('.remove-choice').disabled = rows.length === 1;
+}
+
+function addChoice({ code = '', label = '', prompt = '' } = {}) {
+  const row = byId('choice-template').content.firstElementChild.cloneNode(true);
+  row.querySelector('.choice-code').value = code;
+  row.querySelector('.choice-label').value = label;
+  row.querySelector('.choice-prompt').value = prompt;
+  byId('menu-choices').append(row);
+  return row;
+}
+
+function showAutomationMode() {
+  const guided = byId('automation-mode').value === 'two-message';
+  const guidedSettings = byId('guided-settings');
+  const customSettings = byId('custom-settings');
+  guidedSettings.hidden = guidedSettings.disabled = !guided;
+  customSettings.hidden = customSettings.disabled = guided;
+  byId('away-hint').textContent = guided
+    ? 'Pesan di luar jam layanan ditambahkan ke balasan pertama.'
+    : 'Pesan di luar jam layanan menggantikan sapaan pada chat baru.';
+}
+
+function fillRules({ mode, menu, welcome, away, handoff, keywords }) {
+  byId('automation-mode').value = mode;
+  byId('menu-greeting').value = menu.greeting;
+  byId('menu-fallback').value = menu.fallback;
+  byId('menu-waiting').value = menu.waiting;
+  byId('menu-choices').replaceChildren();
+  for (const choice of menu.choices) addChoice(choice);
+  updateChoiceControls();
   byId('welcome-enabled').checked = welcome.enabled;
   byId('welcome-text').value = welcome.text;
   byId('away-enabled').checked = away.enabled;
@@ -673,8 +707,20 @@ function fillRules({ welcome, away, handoff, keywords }) {
   byId('add-keyword').disabled = false;
   byId('example-menu').hidden = false;
   for (const rule of keywords) addKeyword(rule);
+  showAutomationMode();
 }
 
+byId('automation-mode').addEventListener('change', showAutomationMode);
+byId('add-choice').addEventListener('click', () => {
+  addChoice().querySelector('input').focus();
+  updateChoiceControls();
+});
+byId('menu-choices').addEventListener('click', event => {
+  if (!event.target.matches('.remove-choice')) return;
+  event.target.closest('.menu-choice').remove();
+  updateChoiceControls();
+  byId('add-choice').focus();
+});
 byId('add-keyword').addEventListener('click', () => addKeyword().querySelector('input').focus());
 byId('example-menu').addEventListener('click', () => {
   byId('welcome-enabled').checked = true;
@@ -692,12 +738,41 @@ byId('keywords').addEventListener('click', event => {
   byId('example-menu').hidden = Boolean(byId('keywords').children.length);
   byId('add-keyword').focus();
 });
+function automationSettings(mode) {
+  if (mode === 'two-message') {
+    return {
+      menu: {
+        greeting: byId('menu-greeting').value,
+        fallback: byId('menu-fallback').value,
+        waiting: byId('menu-waiting').value,
+        choices: [...byId('menu-choices').children].map(row => ({
+          code: row.querySelector('.choice-code').value,
+          label: row.querySelector('.choice-label').value,
+          prompt: row.querySelector('.choice-prompt').value,
+        })),
+      },
+    };
+  }
+  return {
+    welcome: { enabled: byId('welcome-enabled').checked, text: byId('welcome-text').value },
+    handoff: byId('handoff-mode').value,
+    keywords: [...byId('keywords').children].map(row => ({
+      keyword: row.querySelector('.keyword-word').value,
+      text: row.querySelector('.keyword-reply').value,
+      match: row.querySelector('.keyword-match').value,
+      handoff: row.querySelector('.keyword-action').value === 'handoff',
+    })),
+  };
+}
+
 byId('rules-form').addEventListener('submit', event => {
   event.preventDefault();
   const button = event.currentTarget.querySelector('[type="submit"]');
   void operate(button, async () => {
+    const mode = byId('automation-mode').value;
     const { rules } = await api('/api/staff/rules', {
-      welcome: { enabled: byId('welcome-enabled').checked, text: byId('welcome-text').value },
+      mode,
+      ...automationSettings(mode),
       away: {
         enabled: byId('away-enabled').checked,
         text: byId('away-text').value,
@@ -705,13 +780,6 @@ byId('rules-form').addEventListener('submit', event => {
         end: byId('open-end').value,
         days: [...byId('open-days').querySelectorAll('input:checked')].map(day => Number(day.value)),
       },
-      handoff: byId('handoff-mode').value,
-      keywords: [...byId('keywords').children].map(row => ({
-        keyword: row.querySelector('.keyword-word').value,
-        text: row.querySelector('.keyword-reply').value,
-        match: row.querySelector('.keyword-match').value,
-        handoff: row.querySelector('.keyword-action').value === 'handoff',
-      })),
     });
     fillRules(rules);
     notice(rulesNote, 'Balasan otomatis tersimpan.');
