@@ -49,10 +49,15 @@ curl -fsS https://helpdesk-jrcare.aruraharja.co.id/healthz
 
 ## Siapkan akun dan coba chat
 
-1. Ambil token penyiapan dari terminal VPS dengan `sudo sed -n 's/^JRCARE_SETUP_TOKEN=//p' /etc/jrcare/jrcare.env`. Buka `https://helpdesk-jrcare.aruraharja.co.id/petugas` dan tentukan sandi untuk akun `admin`.
+1. Tampilkan tautan aktivasi di terminal VPS yang hanya dapat diakses pengelola. Buka tautan tersebut untuk memilih sandi minimal 12 karakter bagi akun `admin`. Tautan hanya dapat dipakai untuk membuat admin pertama.
+
+   ```sh
+   sudo /opt/jrcare/node --env-file=/etc/jrcare/jrcare.env -p 'new URL("/petugas#siapkan=" + encodeURIComponent(process.env.JRCARE_SETUP_TOKEN), process.env.JRCARE_ORIGIN).href'
+   ```
+
 2. Di **Akun agen**, buat sandi sementara untuk Igun, Meri, dan Lingga. Setiap agen masuk dan menentukan sandi tetapnya. Menukar akun di satu browser akan mengganti sesi, jadi gunakan profil browser berbeda saat menguji beberapa peran.
-3. Kirim pesan contoh dari halaman pelanggan. Cek bahwa agen yang siap mendapat chat, agen bisa membalas, dan balasan muncul di halaman pelanggan.
-4. Sesuaikan sapaan, jam layanan WIB, dan kata kunci di **Balasan otomatis**.
+3. Kirim pesan contoh dari halaman pelanggan. Cek penugasan dan balasan, lalu selesaikan chat dan buka tautan chat di browser lain untuk melihat riwayatnya.
+4. Sesuaikan sapaan, jam layanan WIB, dan aturan penerusan di **Balasan otomatis**.
 
 ## Perbarui dan cadangkan
 

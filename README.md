@@ -2,6 +2,8 @@
 
 Live chat web Jasa Raharja Care untuk menerima pertanyaan pelanggan saat kanal WhatsApp Mekari Qontak terganggu. Pelanggan membuka `/` dan petugas masuk melalui `/petugas`. Pesan baru muncul otomatis pada kedua layar.
 
+Setiap percakapan memiliki tautan dan kode sendiri. Pelanggan dapat membuka tautan di perangkat lain atau memasukkan kode lewat **Cek chat**. Saat chat selesai, tautan tetap membuka seluruh riwayat. **Cek chat** juga menampilkan percakapan yang dimulai di browser tersebut selama sesi pelanggan tersimpan.
+
 ## Menjalankan aplikasi
 
 Gunakan Node.js 24 atau lebih baru. Aplikasi memakai SQLite bawaan Node.js.
@@ -30,7 +32,11 @@ Jika portal tidak mengirim sinyal selama 90 detik, agen dianggap offline. Chat o
 
 ## Balasan otomatis
 
-Admin dapat mengubah pengaturan di **Balasan otomatis**. Sapaan awal aktif sejak penyiapan. Pesan di luar jam layanan dapat diaktifkan dengan hari dan jam layanan dalam WIB. Bila berlaku, pesan ini menggantikan sapaan pada awal chat. Untuk setiap pesan pelanggan, JRCare mengirim balasan dari kata atau frasa pertama yang cocok berdasarkan urutan aturan. Pencocokan mengabaikan huruf besar dan kecil.
+Admin dapat mengubah pengaturan di **Balasan otomatis**. Sapaan awal aktif sejak penyiapan. Pesan di luar jam layanan dapat diaktifkan dengan hari dan jam layanan dalam WIB. Bila berlaku, pesan ini menggantikan sapaan pada awal chat.
+
+Di **Menu dan penerusan ke agen**, pilih pencocokan **Sama persis** untuk jawaban seperti `1` atau `0`, atau pilih kata atau frasa yang perlu ada dalam pesan. JRCare menjalankan aturan pertama yang cocok. Setiap aturan dapat membalas saja atau membalas dan meneruskan chat ke antrean agen. **Pakai contoh menu** mengisi contoh yang dapat disunting sebelum disimpan.
+
+Chat dapat masuk antrean sejak pesan pertama atau menunggu di balasan otomatis sampai ada aturan penerusan. Admin juga dapat memilih agar pertanyaan yang tidak cocok langsung masuk antrean. Dalam alur yang menunggu penerusan, balasan aturan berhenti setelah chat masuk antrean agar agen dapat melanjutkan percakapan.
 
 ## Menjalankan di VPS
 
@@ -38,6 +44,6 @@ Untuk `helpdesk-jrcare.aruraharja.co.id`, gunakan [panduan dan installer HestiaC
 
 ### Konfigurasi server Node.js lain
 
-Jalankan satu instance Node.js dengan direktori database persisten. Tentukan alamat HTTPS publik lewat `JRCARE_ORIGIN`, set `NODE_ENV=production`, dan teruskan HTTPS ke port aplikasi melalui reverse proxy. Gunakan `JRCARE_DATABASE` untuk menunjuk penyimpanan persisten bila direktori `./data/` bawaan tidak persisten. Aktifkan `JRCARE_TRUST_PROXY=1` hanya jika server hanya dapat dijangkau lewat reverse proxy yang mengganti header `X-Real-IP` dengan IP klien.
+Jalankan satu instance Node.js dengan direktori database persisten. Tentukan alamat HTTPS publik lewat `JRCARE_ORIGIN`, set `NODE_ENV=production`, dan teruskan HTTPS ke port aplikasi melalui reverse proxy. Nonaktifkan buffering respons untuk `/api/visitor/events` dan `/api/staff/events` agar pembaruan Server-Sent Events langsung diteruskan. Gunakan `JRCARE_DATABASE` untuk menunjuk penyimpanan persisten bila direktori `./data/` bawaan tidak persisten. Aktifkan `JRCARE_TRUST_PROXY=1` hanya jika server hanya dapat dijangkau lewat reverse proxy yang mengganti header `X-Real-IP` dengan IP klien.
 
 Setelah server berjalan, bagikan URL HTTPS halaman utama ke pelanggan. Sesi chat pelanggan tersimpan pada browser yang sama dan riwayatnya tersimpan di database.

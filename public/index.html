@@ -17,7 +17,7 @@
           <img class="brand-mark" src="/assets/jrcare-logo.png" alt="" width="365" height="305">
           <span><strong>JRCare</strong><small>Helpdesk</small></span>
         </a>
-        <a class="header-link" href="/petugas">Portal petugas</a>
+        <a class="header-link" href="/riwayat">Cek chat</a>
       </div>
     </header>
 
@@ -31,7 +31,7 @@
           <h1 id="visitor-title">Ada yang bisa <span>kami bantu?</span></h1>
           <p>Tanya petugas kami soal santunan dan layanan Jasa Raharja.</p>
         </div>
-        <div class="quick-topics" role="group" aria-labelledby="topics-title">
+        <div class="quick-topics" id="quick-topics" role="group" aria-labelledby="topics-title">
           <p id="topics-title">Pilih topik untuk mulai</p>
           <div class="topic-list">
             <button type="button" class="topic" data-topic="Halo, saya ingin bertanya tentang pengajuan santunan." disabled>Pengajuan santunan</button>
@@ -61,7 +61,28 @@
           <button class="primary" type="submit">Mulai chat</button>
         </form>
 
+        <div id="visitor-lookup" class="visitor-lookup" hidden>
+          <form id="lookup-form" class="form-stack">
+            <label for="lookup-code">Tautan atau kode chat</label>
+            <input id="lookup-code" maxlength="256" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+            <button class="primary" type="submit">Buka chat</button>
+          </form>
+          <section aria-labelledby="history-title">
+            <h3 id="history-title">Riwayat di browser ini</h3>
+            <ul id="visitor-history" class="visitor-history"></ul>
+            <p id="history-status" role="status">Memuat riwayat…</p>
+          </section>
+          <a class="secondary small" href="/">Kembali ke live chat</a>
+        </div>
+
         <div id="visitor-thread" class="visitor-thread" hidden>
+          <div class="visitor-reference">
+            <div>
+              <p>Kode chat</p>
+              <code id="visitor-code"></code>
+            </div>
+            <button id="share-chat" class="secondary small" type="button">Salin tautan chat</button>
+          </div>
           <ol id="visitor-messages" class="messages" role="log" aria-label="Percakapan" aria-relevant="additions"></ol>
           <form id="visitor-reply" class="composer" method="post" hidden>
             <label class="sr-only" for="visitor-message">Pesan</label>
@@ -69,8 +90,8 @@
             <button class="primary" type="submit">Kirim</button>
           </form>
           <div id="visitor-closed" class="closed-notice" hidden>
-            <p>Chat ini sudah selesai.</p>
-            <button id="new-chat" class="secondary" type="button">Mulai chat baru</button>
+            <p>Chat selesai. Riwayat tetap tersedia di tautan ini.</p>
+            <a class="secondary" href="/?baru=1">Mulai chat baru</a>
           </div>
         </div>
         <p id="visitor-error" class="notice" role="status" hidden></p>

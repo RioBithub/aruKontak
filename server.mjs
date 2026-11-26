@@ -32,6 +32,12 @@ const visitorAge = 30 * 24 * 60 * 60;
 const bodyLimit = 96 * 1024;
 const rateBuckets = new Map();
 let lastPruned = 0;
+const updateStreams = new Set();
+const updateEvent = 'data: refresh\n\n';
+const updatesAfter = db.prepare(`SELECT id, chat_id AS chatId, previous_agent_id AS previousAgentId, agent_id AS agentId
+  FROM assignment_events WHERE id > ? ORDER BY id`);
+const chatAgent = db.prepare('SELECT assignee_id AS id FROM chats WHERE id = ?');
+let lastPublishedAssignment = db.prepare('SELECT coalesce(max(id), 0) AS id FROM assignment_events').get().id;
 
 const staticFiles = new Map([
   ['/', ['index.html', 'text/html']],
@@ -46,6 +52,7 @@ const staticFiles = new Map([
   bytes: readFileSync(new URL(`./public/${file}`, import.meta.url)),
   type: type.startsWith('text/') ? `${type}; charset=utf-8` : type,
 }]));
+for (const path of ['/chat', '/riwayat']) staticFiles.set(path, staticFiles.get('/'));
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -174,6 +181,56 @@ function checkChatResult(result) {
   if (result === 'agent') throw new HttpError(400, 'Pilih salah satu agen yang terdaftar.');
 }
 
+function visitorAccess(request) {
+  const code = request.headers['x-jrcare-chat-code'];
+  if (code !== undefined && !/^[a-f\d]{32}$/.test(code)) throw new HttpError(404, 'Chat tidak ditemukan. Periksa tautan atau kode chat Anda.');
+  return { key: readCookie(request, visitorCookie), code };
+}
+
+function requireVisitorChat(chat) {
+  if (!chat) throw new HttpError(404, 'Chat tidak ditemukan. Periksa tautan atau kode chat Anda.');
+  return chat;
+}
+
+function writeUpdate(response, frame) {
+  if (!response.destroyed && !response.write(frame)) response.destroy();
+}
+
+function openUpdateStream(request, response, path) {
+  let scope;
+  if (path === '/api/visitor/events') {
+    scope = { chatId: requireVisitorChat(store.visitorChatId(db, visitorAccess(request))) };
+  } else {
+    const user = requireStaff(request);
+    scope = { staffId: user.id, admin: user.role === 'admin', session: readCookie(request, staffCookie) };
+  }
+  if (updateStreams.size >= 512) throw new HttpError(503, 'Koneksi live chat sedang penuh. Coba lagi sebentar.');
+  const stream = { response, ...scope };
+  updateStreams.add(stream);
+  response.on('close', () => updateStreams.delete(stream));
+  response.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-store, no-transform',
+    'X-Accel-Buffering': 'no',
+  });
+  writeUpdate(response, updateEvent);
+}
+
+function publishUpdates(changedChats = new Set()) {
+  const agentIds = new Set();
+  for (const id of changedChats) agentIds.add(chatAgent.get(id)?.id);
+  for (const { id, chatId, previousAgentId, agentId } of updatesAfter.all(lastPublishedAssignment)) {
+    lastPublishedAssignment = id;
+    changedChats.add(chatId);
+    agentIds.add(previousAgentId);
+    agentIds.add(agentId);
+  }
+  if (!changedChats.size) return;
+  for (const { response, chatId, staffId, admin } of updateStreams) {
+    if (changedChats.has(chatId) || admin || (staffId && agentIds.has(staffId))) writeUpdate(response, updateEvent);
+  }
+}
+
 function verifyOrigin(request) {
   const expected = publicOrigin || `http://${request.headers.host}`;
   if (request.headers.origin !== expected) throw new HttpError(403, 'Permintaan harus berasal dari aplikasi JRCare.');
@@ -200,10 +257,13 @@ async function jsonBody(request) {
 function readApi(request, response, url) {
   switch (url.pathname) {
     case '/api/visitor/chat': {
-      const key = readCookie(request, visitorCookie);
-      if (!key) setCookie(response, visitorCookie, newToken(), visitorAge, '/api/visitor');
-      return { chat: key ? store.visitorChat(db, key) : null };
+      const access = visitorAccess(request);
+      if (!access.key && !access.code) setCookie(response, visitorCookie, newToken(), visitorAge, '/api/visitor');
+      const chat = store.visitorChat(db, access);
+      return { chat: access.code ? requireVisitorChat(chat) : chat };
     }
+    case '/api/visitor/history':
+      return { chats: store.visitorHistory(db, readCookie(request, visitorCookie)) };
     case '/api/staff/session': {
       const user = currentStaff(request);
       const setup = store.hasAdmin(db) ? 'complete' : setupToken ? 'ready' : 'waiting';
@@ -225,25 +285,33 @@ function readApi(request, response, url) {
   }
 }
 
-async function writeApi(request, response, path, body) {
+async function writeApi(request, response, path, body, changedChats) {
   switch (path) {
     case '/api/visitor/chat':
     case '/api/visitor/message': {
       limit(request, 'visitor', 180, 60_000);
-      const key = readCookie(request, visitorCookie);
-      if (!key) throw new HttpError(409, 'Sesi chat belum siap. Muat ulang halaman lalu coba lagi.');
+      const access = visitorAccess(request);
+      if (!access.key && (path === '/api/visitor/chat' || !access.code)) {
+        throw new HttpError(409, 'Sesi chat belum siap. Muat ulang halaman lalu coba lagi.');
+      }
       const message = messageOf(body.text);
       const requestKey = requestKeyOf(body.requestKey);
-      if (path === '/api/visitor/chat') return { chat: store.startChat(db, key, nameOf(body.name), message, requestKey) };
-      checkChatResult(store.postVisitorMessage(db, key, idOf(body.chatId), message, requestKey));
-      return { chat: store.visitorChat(db, key) };
+      if (path === '/api/visitor/chat') {
+        const chat = store.startChat(db, access.key, nameOf(body.name), message, requestKey);
+        changedChats.add(chat.id);
+        return { chat };
+      }
+      const id = idOf(body.chatId);
+      checkChatResult(store.postVisitorMessage(db, access, id, message, requestKey));
+      changedChats.add(id);
+      return { chat: store.visitorChat(db, { ...access, id }) };
     }
     case '/api/staff/setup': {
       limit(request, 'setup', 8, 300_000);
       if (store.hasAdmin(db)) throw new HttpError(409, 'Akun admin sudah dibuat.');
       if (!setupToken || typeof body.token !== 'string'
           || !timingSafeEqual(Buffer.from(hash(body.token), 'hex'), Buffer.from(hash(setupToken), 'hex'))) {
-        throw new HttpError(403, 'Token penyiapan tidak cocok.');
+        throw new HttpError(403, 'Kode aktivasi salah. Gunakan kode dari pengelola VPS.');
       }
       const digest = await passwordHash(validPassword(body.password));
       const session = newStaffSession();
@@ -304,7 +372,7 @@ async function writeApi(request, response, path, body) {
       requireStaff(request, { admin: true });
       let rules;
       try { rules = validateRules(body); } catch (error) { throw new HttpError(400, error.message); }
-      store.saveRules(db, rules);
+      for (const id of store.saveRules(db, rules)) changedChats.add(id);
       return { rules };
     }
   }
@@ -346,6 +414,7 @@ async function writeApi(request, response, path, body) {
       checkChatResult(store.assignChat(db, user, id, { agentId, hold, expectedVersion }));
     }
     if (action === 'close') checkChatResult(store.closeChat(db, user, id));
+    changedChats.add(id);
     return {};
   }
 
@@ -371,16 +440,23 @@ const server = createServer({ headersTimeout: 10_000, requestTimeout: 30_000 }, 
     }
     const file = staticFiles.get(url.pathname);
     if (file && (request.method === 'GET' || request.method === 'HEAD')) {
+      if (url.pathname === '/chat' || url.pathname === '/riwayat') response.setHeader('X-Robots-Tag', 'noindex');
       response.writeHead(200, { 'Content-Type': file.type, 'Cache-Control': 'no-cache' });
       response.end(request.method === 'HEAD' ? undefined : file.bytes);
       return;
     }
     if (!url.pathname.startsWith('/api/')) throw new HttpError(404, 'Halaman tidak ditemukan.');
+    if (request.method === 'GET' && ['/api/visitor/events', '/api/staff/events'].includes(url.pathname)) {
+      return openUpdateStream(request, response, url.pathname);
+    }
     if (request.method === 'GET') return sendJson(response, 200, readApi(request, response, url));
     if (request.method !== 'POST') throw new HttpError(405, 'Metode tidak didukung.');
     verifyOrigin(request);
     const body = await jsonBody(request);
-    sendJson(response, 200, await writeApi(request, response, url.pathname, body));
+    const changedChats = new Set();
+    const result = await writeApi(request, response, url.pathname, body, changedChats);
+    publishUpdates(changedChats);
+    sendJson(response, 200, result);
   } catch (error) {
     if (error instanceof HttpError) return sendJson(response, error.status, { error: error.message });
     console.error(error);
@@ -391,11 +467,23 @@ const server = createServer({ headersTimeout: 10_000, requestTimeout: 30_000 }, 
 server.listen(port, host, () => console.log(`JRCare siap di http://${host}:${server.address().port}`));
 
 const routingTimer = setInterval(() => {
-  try { store.runRouting(db); } catch (error) { console.error('Penugasan JRCare gagal', error); }
+  try {
+    store.runRouting(db);
+    publishUpdates();
+  } catch (error) { console.error('Penugasan JRCare gagal', error); }
 }, 15_000).unref();
+
+const heartbeat = setInterval(() => {
+  for (const { response, session } of updateStreams) {
+    if (session && !store.staffBySession(db, session)) response.end();
+    else writeUpdate(response, ': heartbeat\n\n');
+  }
+}, 12_000).unref();
 
 function shutdown() {
   clearInterval(routingTimer);
+  clearInterval(heartbeat);
+  for (const { response } of updateStreams) response.end();
   server.close(() => db.close());
 }
 process.once('SIGTERM', shutdown);

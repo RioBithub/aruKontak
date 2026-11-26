@@ -1,4 +1,4 @@
-import { api, byId, element, notice, postMessage, renderMessages, timeLabel } from './common.js';
+import { api, byId, element, followUpdates, notice, postMessage, renderMessages, timeLabel } from './common.js';
 
 const authForms = ['login', 'setup', 'change'].map(name => byId(`${name}-form`));
 const navButtons = [...document.querySelectorAll('[data-view]')];
@@ -20,6 +20,10 @@ const agentList = byId('agent-list');
 const autoRouting = byId('routing-enabled');
 const acceptingChats = byId('agent-accepting');
 const presenceLabel = byId('agent-presence-label');
+const setupToken = byId('setup-token');
+let activationCode = new URLSearchParams(location.hash.slice(1)).get('siapkan');
+if (activationCode !== null) history.replaceState(null, '', location.pathname + location.search);
+if (activationCode && (activationCode.length < 32 || activationCode.length > 128)) activationCode = null;
 
 let user = null;
 let view = 'inbox';
@@ -32,6 +36,9 @@ let selectedChat = null;
 let queueKey = '';
 let agentOptionsKey = '';
 let readRequest = null;
+let inboxDirty = false;
+let inboxUpdates = null;
+let inboxRetry = null;
 let teamRequest = null;
 let presenceRequest = null;
 let lastPresence = null;
@@ -41,6 +48,8 @@ let scrollAfterSend = false;
 function cancelRead() {
   readRequest?.abort();
   readRequest = null;
+  inboxDirty = false;
+  clearTimeout(inboxRetry);
   teamRequest?.abort();
   teamRequest = null;
 }
@@ -99,6 +108,7 @@ function renderQueue() {
 }
 
 function queueLabel(chat) {
+  if (chat.routingState === 'bot') return 'Balasan otomatis';
   return chat.routingState === 'hold' ? 'Ditahan admin' : 'Menunggu agen';
 }
 
@@ -139,14 +149,21 @@ function renderThread() {
   byId('thread-tools').hidden = Boolean(closedAt);
   byId('staff-reply').hidden = Boolean(closedAt);
   if (user.role === 'admin') {
-    const options = JSON.stringify(agents.map(({ id, name, status }) => [id, name, status]));
+    const botPending = selectedChat.routingState === 'bot';
+    const options = JSON.stringify([botPending, agents.map(({ id, name, status }) => [id, name, status])]);
     if (options !== agentOptionsKey) {
       const choices = agents.map(agent => new Option(agent.status === 'active' ? agent.name : `${agent.name} · ${agentStatus[agent.status]}`, agent.id));
       assignment.replaceChildren(new Option('Antrean otomatis', ''), new Option('Tahan di antrean', 'hold'), ...choices);
+      if (botPending) {
+        const bot = new Option('Balasan otomatis', 'bot');
+        bot.disabled = true;
+        assignment.prepend(bot);
+      }
       agentOptionsKey = options;
     }
     assignment.disabled = working || !agents.length || Boolean(assigneeId && !agents.some(agent => agent.id === assigneeId));
-    const value = assigneeId ? String(assigneeId) : selectedChat.routingState === 'hold' ? 'hold' : '';
+    const state = selectedChat.routingState;
+    const value = assigneeId ? String(assigneeId) : ['bot', 'hold'].includes(state) ? state : '';
     if (assignment.value !== value) assignment.value = value;
   }
   renderAssignmentEvents(selectedChat);
@@ -154,7 +171,13 @@ function renderThread() {
 }
 
 async function refreshInbox() {
-  if (!user || view !== 'inbox' || working || readRequest || document.hidden) return;
+  if (!user || view !== 'inbox' || working || document.hidden) return;
+  if (readRequest) {
+    inboxDirty = true;
+    return;
+  }
+  inboxDirty = false;
+  clearTimeout(inboxRetry);
   const controller = new AbortController();
   const path = selectedId ? `/api/staff/inbox?chat=${selectedId}` : '/api/staff/inbox';
   readRequest = controller;
@@ -176,10 +199,32 @@ async function refreshInbox() {
   } catch (error) {
     if (readRequest !== controller) return;
     if (error.status === 401) endSession();
-    else notice(officeNote, connectionMessage, true);
+    else {
+      notice(officeNote, connectionMessage, true);
+      inboxRetry = setTimeout(refreshInbox, 3_000);
+    }
   } finally {
-    if (readRequest === controller) readRequest = null;
+    if (readRequest === controller) {
+      readRequest = null;
+      if (inboxDirty) void refreshInbox();
+    }
   }
+}
+
+function connectInbox() {
+  if (inboxUpdates) return;
+  inboxUpdates = new AbortController();
+  void followUpdates('/api/staff/events', {
+    signal: inboxUpdates.signal,
+    onUpdate: () => void refreshInbox(),
+    onDisconnect: () => notice(officeNote, connectionMessage, true),
+    onInvalid: () => endSession(),
+  });
+}
+
+function disconnectInbox() {
+  inboxUpdates?.abort();
+  inboxUpdates = null;
 }
 
 async function openView(next) {
@@ -196,8 +241,9 @@ async function openView(next) {
   if (view === 'inbox') {
     renderQueue();
     renderThread();
+    connectInbox();
     void refreshInbox();
-  }
+  } else disconnectInbox();
   if (user.role !== 'admin') return;
   if (view === 'agents') {
     byId('agent-form').hidden = true;
@@ -226,6 +272,10 @@ async function openView(next) {
 
 function showSession(staff, setup = 'complete') {
   user = staff;
+  if (setup !== 'ready') {
+    activationCode = null;
+    setupToken.value = '';
+  }
   const signedIn = user && !user.mustChangePassword;
   byId('auth').hidden = Boolean(signedIn);
   byId('office').hidden = !signedIn;
@@ -247,12 +297,16 @@ function showSession(staff, setup = 'complete') {
     intro.textContent = `Halo, ${user.name}. Pilih sandi baru dengan minimal 12 karakter.`;
     byId('change-form').hidden = false;
   } else if (setup === 'ready') {
-    title.textContent = 'Siapkan JRCare';
-    intro.textContent = 'Buat akun pertama dengan nama pengguna admin. Akun awal Igun, Meri, dan Lingga akan tersedia di portal.';
+    title.textContent = 'Aktivasi admin JRCare';
+    intro.textContent = activationCode
+      ? 'Pilih sandi minimal 12 karakter untuk akun admin.'
+      : 'Gunakan tautan aktivasi atau masukkan kode sekali pakai dari pengelola VPS. Setelah aktivasi, masuk dengan nama pengguna admin dan sandi pilihan Anda.';
+    byId('setup-code-field').hidden = Boolean(activationCode);
+    setupToken.value = activationCode ?? '';
     byId('setup-form').hidden = false;
   } else if (setup === 'waiting') {
-    title.textContent = 'Penyiapan JRCare';
-    intro.textContent = 'Atur token penyiapan pada konfigurasi server untuk membuat akun admin.';
+    title.textContent = 'Aktivasi admin JRCare';
+    intro.textContent = 'Hubungi pengelola VPS untuk mendapatkan tautan aktivasi admin.';
   } else {
     title.textContent = 'Masuk portal petugas';
     intro.textContent = 'Gunakan akun petugas JRCare Anda.';
@@ -262,6 +316,7 @@ function showSession(staff, setup = 'complete') {
 
 function endSession(message = 'Sesi berakhir. Silakan masuk kembali.') {
   cancelRead();
+  disconnectInbox();
   presenceRequest?.abort();
   presenceRequest = null;
   lastPresence = null;
@@ -319,6 +374,11 @@ for (const form of authForms) {
       if (name === 'change' && error.status === 401) endSession(error.message);
       else {
         notice(authNote, error.message, true);
+        if (name === 'setup' && error.status === 403 && activationCode) {
+          activationCode = null;
+          showSession(null, 'ready');
+          setupToken.focus();
+        }
         if (name === 'setup' && error.status === 409) void loadSession();
       }
     } finally { submit.disabled = false; }
@@ -588,33 +648,48 @@ byId('copy-link').addEventListener('click', async () => {
   } catch { notice(officeNote, url); }
 });
 
-function addKeyword(keyword = '', text = '') {
+function addKeyword({ keyword = '', text = '', match = 'exact', handoff = false } = {}) {
   const row = byId('keyword-template').content.firstElementChild.cloneNode(true);
   row.querySelector('.keyword-word').value = keyword;
   row.querySelector('.keyword-reply').value = text;
+  row.querySelector('.keyword-match').value = match;
+  row.querySelector('.keyword-action').value = handoff ? 'handoff' : 'reply';
   byId('keywords').append(row);
   byId('add-keyword').disabled = byId('keywords').children.length >= 20;
+  byId('example-menu').hidden = true;
   return row;
 }
 
-function fillRules({ welcome, away, keywords }) {
+function fillRules({ welcome, away, handoff, keywords }) {
   byId('welcome-enabled').checked = welcome.enabled;
   byId('welcome-text').value = welcome.text;
   byId('away-enabled').checked = away.enabled;
   byId('away-text').value = away.text;
   byId('open-start').value = away.start;
   byId('open-end').value = away.end;
+  byId('handoff-mode').value = handoff;
   for (const checkbox of byId('open-days').querySelectorAll('input')) checkbox.checked = away.days.includes(Number(checkbox.value));
   byId('keywords').replaceChildren();
   byId('add-keyword').disabled = false;
-  for (const rule of keywords) addKeyword(rule.keyword, rule.text);
+  byId('example-menu').hidden = false;
+  for (const rule of keywords) addKeyword(rule);
 }
 
 byId('add-keyword').addEventListener('click', () => addKeyword().querySelector('input').focus());
+byId('example-menu').addEventListener('click', () => {
+  byId('welcome-enabled').checked = true;
+  byId('welcome-text').value = 'Halo, selamat datang di JRCare.\nBalas 1 untuk pengajuan santunan, 2 untuk status pengajuan, atau 0 untuk bicara dengan petugas.';
+  byId('handoff-mode').value = 'rules';
+  addKeyword({ keyword: '1', text: 'Petugas akan membantu pertanyaan Anda tentang pengajuan santunan. Anda bisa melanjutkan pertanyaan di sini.', handoff: true });
+  addKeyword({ keyword: '2', text: 'Petugas akan membantu pertanyaan Anda tentang status pengajuan. Anda bisa melanjutkan pertanyaan di sini.', handoff: true });
+  addKeyword({ keyword: '0', text: 'Baik, chat Anda diteruskan ke antrean petugas.', handoff: true });
+  byId('handoff-mode').focus();
+});
 byId('keywords').addEventListener('click', event => {
   if (!event.target.matches('.remove-keyword')) return;
   event.target.closest('.keyword-row').remove();
   byId('add-keyword').disabled = false;
+  byId('example-menu').hidden = Boolean(byId('keywords').children.length);
   byId('add-keyword').focus();
 });
 byId('rules-form').addEventListener('submit', event => {
@@ -630,9 +705,12 @@ byId('rules-form').addEventListener('submit', event => {
         end: byId('open-end').value,
         days: [...byId('open-days').querySelectorAll('input:checked')].map(day => Number(day.value)),
       },
+      handoff: byId('handoff-mode').value,
       keywords: [...byId('keywords').children].map(row => ({
         keyword: row.querySelector('.keyword-word').value,
         text: row.querySelector('.keyword-reply').value,
+        match: row.querySelector('.keyword-match').value,
+        handoff: row.querySelector('.keyword-action').value === 'handoff',
       })),
     });
     fillRules(rules);
@@ -646,7 +724,10 @@ document.addEventListener('visibilitychange', () => {
   void refreshTeam();
   void syncPresence();
 });
-setInterval(refreshInbox, 2_000);
+window.addEventListener('pagehide', disconnectInbox);
+window.addEventListener('pageshow', event => {
+  if (event.persisted && user && !user.mustChangePassword && view === 'inbox') connectInbox();
+});
 setInterval(refreshTeam, 5_000);
 setInterval(syncPresence, 20_000);
 void loadSession();

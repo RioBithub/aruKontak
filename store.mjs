@@ -1,19 +1,45 @@
+import { randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { automaticReplies, defaultRules } from './rules.mjs';
+import { automationFor, defaultRules } from './rules.mjs';
 import { agentStates, assignmentEvents, migrateRouting, recordAssignment, routeWaitingChats, routingEnabled } from './routing.mjs';
 
 const initialAgents = ['Igun', 'Meri', 'Lingga'];
 const staffFields = 'id, username, name, role, password_hash AS passwordHash, temporary';
 const chatSummary = `
   SELECT c.id, c.visitor_name AS name, c.assignee_id AS assigneeId, a.name AS agentName,
-         c.closed_at AS closedAt, c.updated_at AS updatedAt, c.routing_state AS routingState,
+         c.closed_at AS closedAt, c.updated_at AS updatedAt,
+         CASE WHEN c.bot_pending THEN 'bot' ELSE c.routing_state END AS routingState,
          c.assignment_version AS assignmentVersion,
          (SELECT substr(body, 1, 180) FROM messages
           WHERE chat_id = c.id AND sender <> 'auto' ORDER BY id DESC LIMIT 1) AS preview
   FROM chats c LEFT JOIN users a ON a.id = c.assignee_id
 `;
+const visitorSummary = `
+  SELECT c.id, c.visitor_name AS name, c.access_code AS code, c.closed_at AS closedAt,
+         c.bot_pending AS botPending, a.name AS agentName
+  FROM chats c LEFT JOIN users a ON a.id = c.assignee_id
+`;
+
+function chatCode() {
+  return randomBytes(16).toString('hex');
+}
+
+function migrateChats(db) {
+  if (db.prepare('PRAGMA user_version').get().user_version < 2) {
+    db.exec(`
+      ALTER TABLE chats ADD COLUMN access_code TEXT;
+      ALTER TABLE chats ADD COLUMN bot_pending INTEGER NOT NULL DEFAULT 0 CHECK (bot_pending IN (0, 1));
+      CREATE UNIQUE INDEX chats_by_access_code ON chats(access_code);
+      PRAGMA user_version = 2;
+    `);
+  }
+  const setCode = db.prepare('UPDATE chats SET access_code = ? WHERE id = ?');
+  for (const { id } of db.prepare('SELECT id FROM chats WHERE access_code IS NULL').all()) {
+    setCode.run(chatCode(), id);
+  }
+}
 
 export function openStore(filename) {
   if (filename !== ':memory:') mkdirSync(dirname(filename), { recursive: true, mode: 0o700 });
@@ -70,7 +96,10 @@ export function openStore(filename) {
     );
   `);
   db.prepare('INSERT OR IGNORE INTO reply_settings (id, rules) VALUES (1, ?)').run(JSON.stringify(defaultRules));
-  transaction(db, () => migrateRouting(db));
+  transaction(db, () => {
+    migrateRouting(db);
+    migrateChats(db);
+  });
   return db;
 }
 
@@ -206,11 +235,22 @@ export function runRouting(db) {
 }
 
 export function getRules(db) {
-  return JSON.parse(db.prepare('SELECT rules FROM reply_settings WHERE id = 1').get().rules);
+  const rules = JSON.parse(db.prepare('SELECT rules FROM reply_settings WHERE id = 1').get().rules);
+  return {
+    ...rules,
+    handoff: rules.handoff ?? 'immediate',
+    keywords: rules.keywords.map(rule => ({ match: 'contains', handoff: false, ...rule })),
+  };
 }
 
 export function saveRules(db, rules) {
-  db.prepare('UPDATE reply_settings SET rules = ? WHERE id = 1').run(JSON.stringify(rules));
+  return transaction(db, () => {
+    db.prepare('UPDATE reply_settings SET rules = ? WHERE id = 1').run(JSON.stringify(rules));
+    if (rules.handoff !== 'immediate') return [];
+    const released = db.prepare('UPDATE chats SET bot_pending = 0 WHERE bot_pending = 1 AND closed_at IS NULL RETURNING id').all();
+    if (released.length) routeWaitingChats(db);
+    return released.map(chat => chat.id);
+  });
 }
 
 function messagesFor(db, chatId) {
@@ -218,55 +258,73 @@ function messagesFor(db, chatId) {
     FROM messages WHERE chat_id = ? ORDER BY id`).all(chatId);
 }
 
-function visitorSummary(db, visitorKey) {
-  return db.prepare(`${chatSummary} WHERE c.visitor_key = ? ORDER BY c.id DESC LIMIT 1`).get(visitorKey);
+export function visitorHistory(db, key) {
+  if (!key) return [];
+  return db.prepare(`SELECT c.access_code AS code, c.closed_at AS closedAt, c.updated_at AS updatedAt,
+      (SELECT substr(body, 1, 120) FROM messages WHERE chat_id = c.id AND sender = 'visitor'
+        ORDER BY id LIMIT 1) AS preview
+    FROM chats c WHERE c.visitor_key = ? ORDER BY c.id DESC`).all(key);
 }
 
-export function visitorChat(db, visitorKey) {
-  const chat = visitorSummary(db, visitorKey);
-  if (!chat) return null;
-  const { id, name, agentName, closedAt } = chat;
-  return { id, name, agentName, closedAt, messages: messagesFor(db, id) };
+export function visitorChatId(db, { key, code, id }) {
+  if (code) return db.prepare('SELECT id FROM chats WHERE access_code = ?').get(code)?.id;
+  if (!key) return undefined;
+  if (id) return db.prepare('SELECT id FROM chats WHERE visitor_key = ? AND id = ?').get(key, id)?.id;
+  return db.prepare('SELECT id FROM chats WHERE visitor_key = ? ORDER BY id DESC LIMIT 1').get(key)?.id;
 }
 
-function addVisitorMessage(db, id, name, body, requestKey, now, isNewChat) {
+function visitorThread(db, id) {
+  if (!id) return null;
+  const chat = db.prepare(`${visitorSummary} WHERE c.id = ?`).get(id);
+  return { ...chat, botPending: Boolean(chat.botPending), messages: messagesFor(db, id) };
+}
+
+export function visitorChat(db, access) {
+  return visitorThread(db, visitorChatId(db, access));
+}
+
+function addVisitorMessage(db, chat, body, requestKey, now, rules, isNewChat = false) {
+  const { id, name, botPending } = chat;
+  const { replies, handoff } = automationFor(rules, body, { isNewChat, botPending, now: new Date(now) });
   const insertMessage = db.prepare('INSERT INTO messages (chat_id, sender, sender_name, body, created_at, request_key) VALUES (?, ?, ?, ?, ?, ?)');
   insertMessage.run(id, 'visitor', name, body, now, requestKey);
-  for (const reply of automaticReplies(getRules(db), body, isNewChat, new Date(now))) {
-    insertMessage.run(id, 'auto', 'JRCare', reply, now, null);
-  }
-  db.prepare('UPDATE chats SET updated_at = ? WHERE id = ?').run(now, id);
+  for (const reply of replies) insertMessage.run(id, 'auto', 'JRCare', reply, now, null);
+  db.prepare('UPDATE chats SET updated_at = ?, bot_pending = ? WHERE id = ?').run(now, Number(botPending && !handoff), id);
+  if ((isNewChat && !botPending) || (botPending && handoff)) routeWaitingChats(db, now);
 }
 
 export function startChat(db, visitorKey, name, body, requestKey) {
   return transaction(db, () => {
-    const latest = visitorSummary(db, visitorKey);
-    const retry = db.prepare(`SELECT 1 FROM chats c JOIN messages m ON m.chat_id = c.id
+    const retry = db.prepare(`SELECT c.id FROM chats c JOIN messages m ON m.chat_id = c.id
       WHERE c.visitor_key = ? AND m.sender = 'visitor' AND m.request_key = ? LIMIT 1`).get(visitorKey, requestKey);
-    if (retry) return visitorChat(db, visitorKey);
+    if (retry) return visitorThread(db, retry.id);
 
     const now = Date.now();
-    if (latest && !latest.closedAt) {
-      addVisitorMessage(db, latest.id, latest.name, body, requestKey, now, false);
-    } else {
-      const { lastInsertRowid: id } = db.prepare('INSERT INTO chats (visitor_key, visitor_name, updated_at) VALUES (?, ?, ?)')
-        .run(visitorKey, name, now);
-      addVisitorMessage(db, id, name, body, requestKey, now, true);
-      routeWaitingChats(db, now);
+    const rules = getRules(db);
+    const active = db.prepare(`SELECT id, visitor_name AS name, bot_pending AS botPending
+      FROM chats WHERE visitor_key = ? AND closed_at IS NULL`).get(visitorKey);
+    if (active) {
+      addVisitorMessage(db, active, body, requestKey, now, rules);
+      return visitorThread(db, active.id);
     }
-    return visitorChat(db, visitorKey);
+
+    const botPending = rules.handoff !== 'immediate';
+    const { lastInsertRowid: id } = db.prepare(`INSERT INTO chats (visitor_key, visitor_name, updated_at, access_code, bot_pending)
+      VALUES (?, ?, ?, ?, ?)`).run(visitorKey, name, now, chatCode(), Number(botPending));
+    addVisitorMessage(db, { id, name, botPending }, body, requestKey, now, rules, true);
+    return visitorThread(db, id);
   });
 }
 
-export function postVisitorMessage(db, visitorKey, id, body, requestKey) {
+export function postVisitorMessage(db, access, id, body, requestKey) {
   return transaction(db, () => {
-    const chat = db.prepare('SELECT visitor_name AS name, closed_at AS closedAt FROM chats WHERE id = ? AND visitor_key = ?')
-      .get(id, visitorKey);
-    if (!chat) return 'missing';
+    if (visitorChatId(db, { ...access, id }) !== id) return 'missing';
+    const chat = db.prepare(`SELECT id, visitor_name AS name, closed_at AS closedAt, bot_pending AS botPending
+      FROM chats WHERE id = ?`).get(id);
     if (db.prepare("SELECT 1 FROM messages WHERE chat_id = ? AND sender = 'visitor' AND request_key = ?")
       .get(id, requestKey)) return 'ok';
     if (chat.closedAt) return 'closed';
-    addVisitorMessage(db, id, chat.name, body, requestKey, Date.now(), false);
+    addVisitorMessage(db, chat, body, requestKey, Date.now(), getRules(db));
     return 'ok';
   });
 }
@@ -297,7 +355,8 @@ export function postStaffMessage(db, user, id, body, requestKey) {
     const now = Date.now();
     db.prepare("INSERT INTO messages (chat_id, sender, sender_name, body, created_at, request_key) VALUES (?, 'staff', ?, ?, ?, ?)")
       .run(id, user.name, body, now, requestKey);
-    db.prepare('UPDATE chats SET updated_at = ? WHERE id = ?').run(now, id);
+    db.prepare('UPDATE chats SET updated_at = ?, bot_pending = 0 WHERE id = ?').run(now, id);
+    if (chat.routingState === 'bot') routeWaitingChats(db, now);
     return 'ok';
   });
 }

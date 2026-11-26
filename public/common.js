@@ -21,12 +21,16 @@ export function notice(node, message = '', error = false) {
   node.classList.toggle('error', error);
 }
 
-export async function api(path, body, signal) {
+function chatHeaders(code) {
+  return code ? { 'X-JRCare-Chat-Code': code } : {};
+}
+
+export async function api(path, body, signal, code) {
   const timeout = AbortSignal.timeout(12_000);
-  const options = { signal: signal ? AbortSignal.any([signal, timeout]) : timeout };
+  const options = { signal: signal ? AbortSignal.any([signal, timeout]) : timeout, headers: chatHeaders(code) };
   if (body !== undefined) {
     options.method = 'POST';
-    options.headers = { 'Content-Type': 'application/json' };
+    options.headers['Content-Type'] = 'application/json';
     options.body = JSON.stringify(body);
   }
   let response;
@@ -45,7 +49,55 @@ export async function api(path, body, signal) {
   return data;
 }
 
-export async function postMessage(path, form, payload) {
+export async function followUpdates(path, { signal, code, onUpdate, onDisconnect, onInvalid }) {
+  let delay = 1_000;
+  while (!signal.aborted) {
+    const attempt = new AbortController();
+    let timeout = setTimeout(() => attempt.abort(), 12_000);
+    try {
+      const response = await fetch(path, { headers: chatHeaders(code), signal: AbortSignal.any([signal, attempt.signal]) });
+      clearTimeout(timeout);
+      if (response.status === 401 || response.status === 404) {
+        await response.body?.cancel();
+        if (!signal.aborted) onInvalid(response.status);
+        return;
+      }
+      if (!response.ok || !response.headers.get('content-type')?.startsWith('text/event-stream')) {
+        await response.body?.cancel();
+      } else {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (!signal.aborted) {
+          timeout = setTimeout(() => attempt.abort(), 40_000);
+          const { value, done } = await reader.read();
+          clearTimeout(timeout);
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const end = buffer.lastIndexOf('\n\n');
+          if (end < 0) continue;
+          const frames = buffer.slice(0, end).split('\n\n');
+          buffer = buffer.slice(end + 2);
+          if (frames.includes('data: refresh')) {
+            delay = 1_000;
+            onUpdate();
+          }
+        }
+      }
+    } catch {
+      // Reconnect after a network failure or an interrupted stream.
+    } finally {
+      clearTimeout(timeout);
+      attempt.abort();
+    }
+    if (signal.aborted) return;
+    onDisconnect();
+    await new Promise(resolve => setTimeout(resolve, delay));
+    delay = Math.min(delay * 2, 10_000);
+  }
+}
+
+export async function postMessage(path, form, payload, code) {
   const signature = JSON.stringify([path, payload]);
   let pending = pendingMessages.get(form);
   if (pending?.signature !== signature) {
@@ -54,7 +106,7 @@ export async function postMessage(path, form, payload) {
     pending = { signature, key };
     pendingMessages.set(form, pending);
   }
-  const result = await api(path, { ...payload, requestKey: pending.key });
+  const result = await api(path, { ...payload, requestKey: pending.key }, undefined, code);
   pendingMessages.delete(form);
   return result;
 }
@@ -85,7 +137,7 @@ export function renderMessages(list, chat, perspective, forceScroll = false) {
     item.classList.toggle('auto', message.sender === 'auto');
     const info = element('div', 'message-info');
     const sender = message.sender === 'auto' ? 'Balasan otomatis' : message.senderName;
-    info.append(element('strong', '', sender), timeLabel(message.at));
+    info.append(element('strong', '', sender), timeLabel(message.at, true));
     item.append(info, element('p', '', message.body));
     fragment.append(item);
   }

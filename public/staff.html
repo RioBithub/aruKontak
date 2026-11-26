@@ -43,8 +43,10 @@
           <button class="primary" type="submit">Masuk</button>
         </form>
         <form id="setup-form" method="post" hidden>
-          <label for="setup-token">Token penyiapan</label>
-          <input id="setup-token" type="password" name="token" autocomplete="off" maxlength="128" required>
+          <div id="setup-code-field" class="form-stack">
+            <label for="setup-token">Kode aktivasi admin</label>
+            <input id="setup-token" type="password" name="token" autocomplete="off" maxlength="128" required>
+          </div>
           <label for="setup-password">Sandi untuk admin</label>
           <input id="setup-password" type="password" name="password" autocomplete="new-password" minlength="12" maxlength="128" required>
           <button class="primary" type="submit">Buat akun admin</button>
@@ -172,10 +174,19 @@
             <textarea id="away-text" rows="3" maxlength="1000"></textarea>
           </section>
           <section class="panel settings-card form-stack" aria-labelledby="keyword-title">
-            <h2 id="keyword-title">Kata kunci</h2>
-            <p>JRCare mengirim balasan dari kata atau frasa pertama yang cocok, sesuai urutan di bawah.</p>
+            <h2 id="keyword-title">Menu dan penerusan ke agen</h2>
+            <label for="handoff-mode">Kapan chat masuk antrean agen?</label>
+            <select id="handoff-mode">
+              <option value="immediate">Sejak pesan pertama</option>
+              <option value="rules">Saat aturan meneruskan ke agen</option>
+              <option value="rules-or-unmatched">Saat aturan meneruskan atau pesan tidak cocok</option>
+            </select>
+            <p>Pakai “Sama persis” untuk pilihan angka seperti 1 atau 0. Aturan pertama yang cocok akan dijalankan.</p>
             <div id="keywords" class="keywords"></div>
-            <button id="add-keyword" class="secondary" type="button">Tambah kata kunci</button>
+            <div class="rules-actions">
+              <button id="add-keyword" class="secondary small" type="button">Tambah aturan</button>
+              <button id="example-menu" class="secondary small" type="button">Pakai contoh menu</button>
+            </div>
           </section>
           <div class="rules-actions">
             <button class="primary" type="submit">Simpan balasan otomatis</button>
@@ -200,8 +211,20 @@
     </dialog>
     <template id="keyword-template">
       <article class="keyword-row">
-        <label>Kata atau frasa<input class="keyword-word" maxlength="64" required></label>
-        <label>Isi balasan<textarea class="keyword-reply" rows="2" maxlength="1000" required></textarea></label>
+        <label>Pemicu<input class="keyword-word" maxlength="64" required></label>
+        <label>Pencocokan
+          <select class="keyword-match">
+            <option value="exact">Sama persis</option>
+            <option value="contains">Mengandung kata atau frasa</option>
+          </select>
+        </label>
+        <label>Tindakan
+          <select class="keyword-action">
+            <option value="reply">Balas otomatis</option>
+            <option value="handoff">Balas dan teruskan ke agen</option>
+          </select>
+        </label>
+        <label class="keyword-text">Isi balasan<textarea class="keyword-reply" rows="2" maxlength="1000" required></textarea></label>
         <button class="secondary small remove-keyword" type="button">Hapus aturan</button>
       </article>
     </template>

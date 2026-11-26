@@ -17,8 +17,13 @@ export const defaultRules = {
     start: '08:00',
     end: '17:00',
   },
+  handoff: 'immediate',
   keywords: [],
 };
+
+function exactPhrase(text) {
+  return text.normalize('NFKC').toLocaleLowerCase('id-ID').trim().replace(/\s+/gu, ' ');
+}
 
 function words(text) {
   return (text.normalize('NFKC').toLocaleLowerCase('id-ID').match(/[\p{L}\p{N}]+/gu) ?? []).join(' ');
@@ -49,22 +54,32 @@ export function validateRules(input) {
     throw new Error('Masukkan jam mulai dan selesai. Jam selesai harus setelah jam mulai.');
   }
 
+  const handoff = input.handoff === undefined ? 'immediate' : input.handoff;
+  if (!['immediate', 'rules', 'rules-or-unmatched'].includes(handoff)) {
+    throw new Error('Pilih alur penerusan chat yang valid.');
+  }
   if (!Array.isArray(input.keywords) || input.keywords.length > keywordLimit) {
-    throw new Error(`Gunakan maksimal ${keywordLimit} kata kunci.`);
+    throw new Error(`Gunakan maksimal ${keywordLimit} aturan balasan.`);
   }
   const seen = new Set();
   const keywords = input.keywords.map(rule => {
     const keyword = typeof rule?.keyword === 'string' ? rule.keyword.trim() : '';
     const text = typeof rule?.text === 'string' ? rule.text.trim() : '';
-    const normalized = words(keyword);
-    if (!normalized || keyword.length > 64 || !text || text.length > messageLimit) {
-      throw new Error('Isi kata kunci dan balasannya. Maksimal 64 karakter untuk kata kunci dan 1.000 untuk balasan.');
+    const match = rule?.match === undefined ? 'contains' : rule.match;
+    const forward = rule?.handoff === undefined ? false : rule.handoff;
+    if (!['exact', 'contains'].includes(match) || typeof forward !== 'boolean') {
+      throw new Error('Pilih cara pencocokan dan tindakan yang valid untuk setiap aturan.');
     }
-    if (seen.has(normalized)) throw new Error('Gunakan kata kunci yang berbeda untuk setiap aturan.');
-    seen.add(normalized);
-    return { keyword, text };
+    const normalized = match === 'exact' ? exactPhrase(keyword) : words(keyword);
+    if (!normalized || keyword.length > 64 || !text || text.length > messageLimit) {
+      throw new Error('Isi pemicu dan balasannya. Maksimal 64 karakter untuk pemicu dan 1.000 untuk balasan.');
+    }
+    const key = `${match}:${normalized}`;
+    if (seen.has(key)) throw new Error('Pemicu dengan cara pencocokan yang sama harus berbeda.');
+    seen.add(key);
+    return { keyword, text, match, handoff: forward };
   });
-  return { welcome, away: { ...away, days: [...new Set(days)].sort(), start, end }, keywords };
+  return { welcome, away: { ...away, days: [...new Set(days)].sort(), start, end }, handoff, keywords };
 }
 
 function outsideHours(away, now) {
@@ -74,16 +89,23 @@ function outsideHours(away, now) {
   return !away.days.includes(day) || time < away.start || time >= away.end;
 }
 
-export function automaticReplies(rules, text, isNewChat, now) {
+export function automationFor(rules, text, { isNewChat, botPending, now }) {
   const replies = [];
   if (isNewChat) {
     if (rules.away.enabled && outsideHours(rules.away, now)) replies.push(rules.away.text);
     else if (rules.welcome.enabled) replies.push(rules.welcome.text);
   }
-  if (rules.keywords.length) {
-    const phrase = ` ${words(text)} `;
-    const match = rules.keywords.find(rule => phrase.includes(` ${words(rule.keyword)} `));
-    if (match) replies.push(match.text);
-  }
-  return replies;
+  if (!botPending && rules.handoff !== 'immediate') return { replies, handoff: false };
+
+  const exact = exactPhrase(text);
+  const phrase = ` ${words(text)} `;
+  const match = rules.keywords.find(rule => rule.match === 'exact'
+    ? exact === exactPhrase(rule.keyword)
+    : phrase.includes(` ${words(rule.keyword)} `));
+  if (match) replies.push(match.text);
+  return {
+    replies,
+    handoff: rules.handoff === 'immediate' || Boolean(match?.handoff)
+      || (rules.handoff === 'rules-or-unmatched' && !match),
+  };
 }

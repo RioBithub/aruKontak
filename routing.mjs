@@ -69,7 +69,7 @@ export function recordAssignment(db, { id, assigneeId }, agentId, state, kind, a
   const { lastInsertRowid } = db.prepare(`INSERT INTO assignment_events
     (chat_id, previous_agent_id, agent_id, actor_id, kind, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
     .run(id, assigneeId, agentId, actorId, kind, now);
-  db.prepare('UPDATE chats SET assignee_id = ?, routing_state = ?, assignment_version = ? WHERE id = ?')
+  db.prepare('UPDATE chats SET assignee_id = ?, routing_state = ?, assignment_version = ?, bot_pending = 0 WHERE id = ?')
     .run(agentId, state, lastInsertRowid, id);
   if (agentId) db.prepare('UPDATE users SET last_assignment_id = ? WHERE id = ?').run(lastInsertRowid, agentId);
   return Number(lastInsertRowid);
@@ -91,7 +91,7 @@ export function routeWaitingChats(db, now = Date.now()) {
   const slots = ready.reduce((total, agent) => total + agent.capacity - agent.activeChats, 0);
   if (!slots) return;
   const waiting = db.prepare(`SELECT id, assignee_id AS assigneeId FROM chats
-    WHERE closed_at IS NULL AND assignee_id IS NULL AND routing_state = 'queued'
+    WHERE closed_at IS NULL AND assignee_id IS NULL AND routing_state = 'queued' AND bot_pending = 0
     ORDER BY id LIMIT ?`).all(slots);
   for (const chat of waiting) {
     const [agent] = ready.sort((a, b) => a.activeChats * b.capacity - b.activeChats * a.capacity
