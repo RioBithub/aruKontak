@@ -1,4 +1,5 @@
 import { api, byId, element, followUpdates, notice, postMessage, renderMessages, timeLabel } from './common.js';
+import { openDiagram, resetDiagram } from './workflow.js';
 
 const authForms = ['login', 'setup', 'change'].map(name => byId(`${name}-form`));
 const navButtons = [...document.querySelectorAll('[data-view]')];
@@ -63,6 +64,7 @@ function selectChat(id) {
   byId('staff-messages').replaceChildren();
   delete byId('staff-messages').dataset.chat;
   byId('assignment-history').open = false;
+  byId('thread-answers').open = false;
   renderQueue();
   renderThread();
   void refreshInbox();
@@ -145,6 +147,21 @@ function renderThread() {
   const { name, agentName, assigneeId, closedAt } = selectedChat;
   byId('thread-avatar').textContent = initials(name);
   byId('thread-name').textContent = name;
+  const { phone, email } = selectedChat.contact ?? {};
+  const phoneLink = byId('thread-phone');
+  const emailLink = byId('thread-email');
+  byId('thread-contact').hidden = !phone && !email;
+  phoneLink.hidden = !phone;
+  phoneLink.textContent = phone ?? '';
+  phoneLink.href = phone ? `tel:${phone}` : '';
+  emailLink.hidden = !email;
+  emailLink.textContent = email ?? '';
+  emailLink.href = email ? `mailto:${encodeURIComponent(email).replace('%40', '@')}` : '';
+  const answers = Object.entries(selectedChat.answers ?? {});
+  byId('thread-answers').hidden = !answers.length;
+  byId('thread-answer-list').replaceChildren(...answers.flatMap(([key, value]) => [
+    element('dt', '', key.replaceAll('_', ' ')), element('dd', '', value),
+  ]));
   byId('thread-status').textContent = closedAt ? 'Selesai' : agentName ? `Ditugaskan ke ${agentName}` : queueLabel(selectedChat);
   byId('thread-tools').hidden = Boolean(closedAt);
   byId('staff-reply').hidden = Boolean(closedAt);
@@ -245,6 +262,10 @@ async function openView(next) {
     void refreshInbox();
   } else disconnectInbox();
   if (user.role !== 'admin') return;
+  if (view === 'workflow') {
+    openDiagram(endSession);
+    return;
+  }
   if (view === 'agents') {
     byId('agent-form').hidden = true;
     byId('routing-form').hidden = true;
@@ -317,6 +338,7 @@ function showSession(staff, setup = 'complete') {
 function endSession(message = 'Sesi berakhir. Silakan masuk kembali.') {
   cancelRead();
   disconnectInbox();
+  resetDiagram();
   presenceRequest?.abort();
   presenceRequest = null;
   lastPresence = null;
@@ -331,6 +353,11 @@ function endSession(message = 'Sesi berakhir. Silakan masuk kembali.') {
   agentOptionsKey = '';
   selectedId = null;
   selectedChat = null;
+  for (const id of ['thread-phone', 'thread-email']) {
+    byId(id).textContent = '';
+    byId(id).removeAttribute('href');
+  }
+  byId('thread-answer-list').replaceChildren();
   filter = 'active';
   scrollAfterSend = false;
   queue.replaceChildren();
@@ -677,14 +704,18 @@ function addChoice({ code = '', label = '', prompt = '' } = {}) {
 }
 
 function showAutomationMode() {
-  const guided = byId('automation-mode').value === 'two-message';
+  const mode = byId('automation-mode').value;
+  const guided = mode === 'two-message';
   const guidedSettings = byId('guided-settings');
   const customSettings = byId('custom-settings');
   guidedSettings.hidden = guidedSettings.disabled = !guided;
-  customSettings.hidden = customSettings.disabled = guided;
-  byId('away-hint').textContent = guided
-    ? 'Pesan di luar jam layanan ditambahkan ke balasan pertama.'
-    : 'Pesan di luar jam layanan menggantikan sapaan pada chat baru.';
+  customSettings.hidden = customSettings.disabled = mode !== 'custom';
+  byId('open-workflow').hidden = mode !== 'workflow';
+  byId('away-hint').textContent = {
+    workflow: 'Diagram memakai jam ini pada blok Kondisi dan pemberitahuan di blok Pilihan menu.',
+    'two-message': 'Pesan di luar jam layanan ditambahkan ke balasan pertama.',
+    custom: 'Pesan di luar jam layanan menggantikan sapaan pada chat baru.',
+  }[mode];
 }
 
 function fillRules({ mode, menu, welcome, away, handoff, keywords }) {
@@ -711,6 +742,7 @@ function fillRules({ mode, menu, welcome, away, handoff, keywords }) {
 }
 
 byId('automation-mode').addEventListener('change', showAutomationMode);
+byId('open-workflow').addEventListener('click', () => void openView('workflow'));
 byId('add-choice').addEventListener('click', () => {
   addChoice().querySelector('input').focus();
   updateChoiceControls();
@@ -739,6 +771,7 @@ byId('keywords').addEventListener('click', event => {
   byId('add-keyword').focus();
 });
 function automationSettings(mode) {
+  if (mode === 'workflow') return {};
   if (mode === 'two-message') {
     return {
       menu: {

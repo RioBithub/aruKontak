@@ -56,8 +56,8 @@ curl -fsS https://helpdesk-jrcare.aruraharja.co.id/healthz
    ```
 
 2. Di **Akun agen**, buat sandi sementara untuk Igun, Meri, dan Lingga. Setiap agen masuk dan menentukan sandi tetapnya. Menukar akun di satu browser akan mengganti sesi, jadi gunakan profil browser berbeda saat menguji beberapa peran.
-3. Kirim pesan contoh dari halaman pelanggan, lalu pilih layanan. Cek kedua balasan bot dan penugasan agen, selesaikan chat, lalu buka tautannya di browser lain untuk melihat riwayatnya.
-4. Sesuaikan pilihan layanan, format data, pesan tunggu, dan jam layanan WIB di **Balasan otomatis**.
+3. Isi nomor telepon pada chat contoh, lalu pilih layanan. Cek kedua balasan bot, penugasan agen, dan kontak di kotak masuk. Coba tinggalkan chat dengan konfirmasi dan buka lagi dari browser yang sama.
+4. Edit dan uji automasi melalui **Diagram alur**. Atur jam layanan WIB di **Balasan otomatis**.
 
 ## Perbarui dan cadangkan
 

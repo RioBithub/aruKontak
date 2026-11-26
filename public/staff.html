@@ -65,6 +65,7 @@
           <button type="button" data-view="inbox" aria-controls="inbox" aria-current="page">Kotak masuk</button>
           <button type="button" data-view="agents" aria-controls="agents" data-admin>Akun agen</button>
           <button type="button" data-view="rules" aria-controls="rules" data-admin>Balasan otomatis</button>
+          <button type="button" data-view="workflow" aria-controls="workflow" data-admin>Diagram alur</button>
         </nav>
         <div id="agent-presence" class="agent-presence" hidden>
           <label class="check toggle"><input id="agent-accepting" type="checkbox" disabled> Terima chat otomatis</label>
@@ -100,6 +101,10 @@
                 <div>
                   <h2 id="thread-name"></h2>
                   <p id="thread-status"></p>
+                  <p id="thread-contact" class="thread-contact" hidden>
+                    <a id="thread-phone" hidden></a>
+                    <a id="thread-email" hidden></a>
+                  </p>
                 </div>
               </div>
               <div id="thread-tools" class="thread-tools">
@@ -110,6 +115,10 @@
               <details id="assignment-history" class="assignment-history" data-admin hidden>
                 <summary>Riwayat penugasan</summary>
                 <ol id="assignment-events"></ol>
+              </details>
+              <details id="thread-answers" class="assignment-history" hidden>
+                <summary>Jawaban dari bot</summary>
+                <dl id="thread-answer-list" class="collected-answers"></dl>
               </details>
             </header>
             <ol id="staff-messages" class="messages" role="log" aria-label="Percakapan pelanggan" aria-relevant="additions"></ol>
@@ -149,9 +158,11 @@
           <section class="panel settings-card form-stack">
             <label for="automation-mode">Alur balasan</label>
             <select id="automation-mode">
+              <option value="workflow">Diagram alur</option>
               <option value="two-message">Dua balasan + penugasan otomatis</option>
               <option value="custom">Aturan kata kunci</option>
             </select>
+            <button id="open-workflow" class="secondary small" type="button" hidden>Edit diagram alur</button>
           </section>
           <fieldset id="guided-settings" class="automation-settings" hidden disabled>
             <legend class="sr-only">Alur dua balasan</legend>
@@ -222,7 +233,97 @@
           </div>
         </form>
       </section>
+
+      <section id="workflow" class="workflow-layout" aria-labelledby="workflow-title" hidden>
+        <header class="workflow-heading">
+          <div>
+            <h1 id="workflow-title">Diagram alur</h1>
+            <p id="workflow-status" role="status">Memuat diagram…</p>
+          </div>
+          <div class="chat-actions">
+            <button id="flow-preview" class="secondary small" type="button" disabled>Uji alur</button>
+            <button id="flow-save" class="secondary small" type="button" disabled>Simpan draf</button>
+            <button id="flow-publish" class="primary small" type="button" disabled>Terbitkan alur</button>
+          </div>
+        </header>
+        <p id="flow-note" class="notice" role="status" hidden></p>
+        <div id="flow-workspace" class="flow-workspace" hidden>
+          <section class="panel flow-board" aria-label="Kanvas diagram">
+            <div class="flow-toolbar">
+              <label class="sr-only" for="flow-type">Jenis blok baru</label>
+              <select id="flow-type">
+                <option value="message">Kirim pesan</option>
+                <option value="menu">Pilihan menu</option>
+                <option value="collect">Minta jawaban</option>
+                <option value="condition">Kondisi</option>
+                <option value="handoff">Tugaskan ke agen</option>
+                <option value="close">Selesaikan chat</option>
+              </select>
+              <button id="flow-add" class="secondary small" type="button">Tambah blok</button>
+              <button id="flow-arrange" class="secondary small" type="button">Rapikan</button>
+              <label class="sr-only" for="flow-zoom">Ukuran diagram</label>
+              <select id="flow-zoom">
+                <option value="0.5">50%</option>
+                <option value="0.75">75%</option>
+                <option value="1" selected>100%</option>
+                <option value="1.25">125%</option>
+              </select>
+            </div>
+            <p id="flow-link-note" class="flow-link-note" role="status" hidden></p>
+            <div id="flow-canvas" class="flow-canvas" tabindex="0" aria-label="Area diagram yang dapat digulir">
+              <div id="flow-sizer" class="flow-sizer">
+                <div id="flow-stage" class="flow-stage">
+                  <svg id="flow-lines" class="flow-lines" aria-hidden="true">
+                    <defs>
+                      <marker id="flow-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+                        <path d="M0 0 L8 4 L0 8 Z"></path>
+                      </marker>
+                    </defs>
+                    <g id="flow-edges"></g>
+                  </svg>
+                </div>
+              </div>
+            </div>
+            <div class="flow-footer chat-actions">
+              <button id="flow-template" class="secondary small" type="button">Pakai template dua bubble</button>
+              <button id="flow-reload" class="secondary small" type="button">Muat ulang draf</button>
+            </div>
+          </section>
+          <aside class="panel flow-inspector" aria-labelledby="flow-block-title">
+            <h2 id="flow-block-title">Blok</h2>
+            <div id="flow-properties" class="form-stack flow-properties"></div>
+            <button id="flow-delete" class="secondary small" type="button" hidden>Hapus blok</button>
+          </aside>
+        </div>
+      </section>
     </main>
+
+    <dialog id="flow-test" class="panel password-dialog flow-test" aria-labelledby="flow-test-title">
+      <h2 id="flow-test-title">Uji alur</h2>
+      <form id="flow-test-start" class="flow-test-controls">
+        <label>Pesan awal<input id="flow-test-first" value="Halo" maxlength="2000" required></label>
+        <label>Simulasi jam
+          <select id="flow-test-hours">
+            <option value="current">Sekarang</option>
+            <option value="inside">Jam layanan</option>
+            <option value="outside">Di luar jam layanan</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" id="flow-test-email"> Pelanggan punya email</label>
+        <button class="secondary small" type="submit">Mulai ulang</button>
+      </form>
+      <p id="flow-test-note" class="notice" role="status" hidden></p>
+      <ol id="flow-test-messages" class="messages" role="log" aria-label="Percakapan uji"></ol>
+      <div id="flow-test-choices" class="visitor-choices" hidden></div>
+      <form id="flow-test-reply" class="composer" hidden>
+        <label for="flow-test-input" class="sr-only">Pesan uji</label>
+        <textarea id="flow-test-input" rows="2" maxlength="2000" placeholder="Tulis pesan uji" required></textarea>
+        <button type="submit" class="primary small">Kirim</button>
+      </form>
+      <form method="dialog" class="dialog-actions">
+        <button class="secondary small" type="submit">Tutup</button>
+      </form>
+    </dialog>
 
     <dialog id="password-dialog" class="panel password-dialog" aria-labelledby="password-title">
       <h2 id="password-title">Sandi sementara</h2>

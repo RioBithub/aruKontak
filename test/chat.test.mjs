@@ -25,7 +25,14 @@ test('backfills stable links for existing chats and keeps codes out of the inbox
     welcome: defaultRules.welcome, away: defaultRules.away, keywords: [],
   }));
   db.exec(`
+    DROP TABLE visitor_departures;
+    DROP TABLE workflow_settings;
     DROP INDEX chats_by_access_code;
+    ALTER TABLE chats DROP COLUMN preferred_agent_id;
+    ALTER TABLE chats DROP COLUMN bot_progress;
+    ALTER TABLE chats DROP COLUMN bot_workflow;
+    ALTER TABLE chats DROP COLUMN visitor_email;
+    ALTER TABLE chats DROP COLUMN visitor_phone;
     ALTER TABLE chats DROP COLUMN access_code;
     ALTER TABLE chats DROP COLUMN bot_pending;
     ALTER TABLE chats DROP COLUMN bot_menu;
@@ -37,7 +44,7 @@ test('backfills stable links for existing chats and keeps codes out of the inbox
   db = store.openStore(filename);
   const restored = store.visitorChat(db, { key: 'original-browser' });
   assert.match(restored.code, /^[a-f0-9]{32}$/);
-  assert.equal(store.getRules(db).mode, 'two-message');
+  assert.equal(store.getRules(db).mode, 'workflow');
   assert.equal(restored.messages[0].body, 'Pesan sebelum pembaruan');
   assert.deepEqual(restored.choices, []);
   assert.equal(Object.hasOwn(store.inbox(db, admin, chat.id).chat, 'code'), false);
@@ -46,6 +53,34 @@ test('backfills stable links for existing chats and keeps codes out of the inbox
 
   db = store.openStore(filename);
   assert.deepEqual(store.visitorChat(db, { code: restored.code }), restored);
+});
+
+test('keeps contact with the authorized chat and resumes a confirmed departure for 24 hours', t => {
+  const db = store.openStore(':memory:');
+  t.after(() => db.close());
+  const admin = store.setupAdmin(db, 'hash', session('admin'));
+  const contact = { phone: '+628123456789', email: 'pengunjung@example.test' };
+  const first = store.startChat(db, 'owner', 'Pengunjung', 'Halo', 'start', contact);
+  assert.deepEqual(store.inbox(db, admin, first.id).chat.contact, contact);
+  assert.equal(Object.hasOwn(first, 'contact'), false);
+  assert.equal(Object.hasOwn(store.inbox(db, admin).chats[0], 'contact'), false);
+
+  const now = 123_456_789;
+  const day = 86_400_000;
+  assert.equal(store.leaveChat(db, { key: 'other-browser' }, first.id, now), 'missing');
+  assert.equal(store.leaveChat(db, { key: 'other-browser', code: first.code }, first.id, now), 'ok');
+  assert.deepEqual({ ...store.visitorSession(db, 'other-browser', now + day - 1).resume }, {
+    code: first.code, closedAt: null, expiresAt: now + day, remainingMs: 1,
+  });
+  assert.equal(store.visitorSession(db, 'owner', now).chat.id, first.id);
+  assert.deepEqual(store.visitorSession(db, 'other-browser', now + day), { chat: null, resume: null });
+
+  store.leaveChat(db, { key: 'owner' }, first.id);
+  const second = store.startChat(db, 'owner', 'Pengunjung', 'Ada pertanyaan lain', 'next', { phone: contact.phone });
+  assert.notEqual(first.id, second.id);
+  assert.equal(store.visitorSession(db, 'owner').chat.id, second.id);
+  assert.equal(store.visitorChat(db, { code: first.code }).closedAt, null);
+  assert.deepEqual(store.inbox(db, admin, second.id).chat.contact, { phone: contact.phone, email: null });
 });
 
 test('restores the exact closed chat after a new chat starts and only lets its owner send', t => {

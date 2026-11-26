@@ -90,13 +90,14 @@ export function routeWaitingChats(db, now = Date.now()) {
   const ready = agents.filter(agent => agent.online && agent.accepting && agent.activeChats < agent.capacity);
   const slots = ready.reduce((total, agent) => total + agent.capacity - agent.activeChats, 0);
   if (!slots) return;
-  const waiting = db.prepare(`SELECT id, assignee_id AS assigneeId FROM chats
+  const waiting = db.prepare(`SELECT id, assignee_id AS assigneeId, preferred_agent_id AS preferredAgentId FROM chats
     WHERE closed_at IS NULL AND assignee_id IS NULL AND routing_state = 'queued' AND bot_pending = 0
     ORDER BY id LIMIT ?`).all(slots);
   for (const chat of waiting) {
-    const [agent] = ready.sort((a, b) => a.activeChats * b.capacity - b.activeChats * a.capacity
-      || a.lastAssignment - b.lastAssignment || a.id - b.id);
+    const agent = ready.find(item => item.id === chat.preferredAgentId)
+      ?? ready.sort((a, b) => a.activeChats * b.capacity - b.activeChats * a.capacity
+        || a.lastAssignment - b.lastAssignment || a.id - b.id)[0];
     agent.lastAssignment = recordAssignment(db, chat, agent.id, 'auto', 'auto', null, now);
-    if (++agent.activeChats === agent.capacity) ready.shift();
+    if (++agent.activeChats === agent.capacity) ready.splice(ready.indexOf(agent), 1);
   }
 }

@@ -43,11 +43,11 @@ export const defaultRules = {
   keywords: [],
 };
 
-function exactPhrase(text) {
+export function exactPhrase(text) {
   return text.normalize('NFKC').toLocaleLowerCase('id-ID').trim().replace(/\s+/gu, ' ');
 }
 
-function words(text) {
+export function words(text) {
   return (text.normalize('NFKC').toLocaleLowerCase('id-ID').match(/[\p{L}\p{N}]+/gu) ?? []).join(' ');
 }
 
@@ -96,7 +96,7 @@ function validateMenu(menu) {
 
 export function validateRules(input) {
   const mode = input.mode === undefined ? defaultRules.mode : input.mode;
-  if (!['two-message', 'custom'].includes(mode)) throw new Error('Pilih alur balasan otomatis yang valid.');
+  if (!['workflow', 'two-message', 'custom'].includes(mode)) throw new Error('Pilih alur balasan otomatis yang valid.');
   const menu = validateMenu(input.menu === undefined ? defaultMenu : input.menu);
   const welcome = messageSetting(input.welcome, 'Sapaan');
   const away = messageSetting(input.away, 'Pesan di luar jam layanan');
@@ -139,30 +139,37 @@ export function validateRules(input) {
   return { mode, menu, welcome, away: { ...away, days: [...new Set(days)].sort(), start, end }, handoff, keywords };
 }
 
-function outsideHours(away, now) {
+export function outsideHours(away, now) {
   const parts = Object.fromEntries(jakartaClock.formatToParts(now).map(({ type, value }) => [type, value]));
   const day = weekdays.indexOf(parts.weekday) + 1;
   const time = `${parts.hour}:${parts.minute}`;
   return !away.days.includes(day) || time < away.start || time >= away.end;
 }
 
-function menuAutomation(menu, away, text, { isNewChat, botPending, now }) {
-  if (isNewChat) {
-    const choices = menu.choices.map(({ code, label }) => `${code} — ${label}`).join('\n');
-    const instructions = 'Balas dengan kode pilihan atau tuliskan kebutuhan Anda.';
-    const hours = away.enabled && outsideHours(away, now) ? away.text : '';
-    const greeting = [menu.greeting, choices, instructions, hours].filter(Boolean).join('\n\n');
-    return { replies: [greeting], handoff: false };
-  }
-  if (!botPending) return { replies: [], handoff: false };
-
+export function matchingChoice(choices, text) {
   const input = exactPhrase(text);
   const numeric = input.match(/^(?:(?:pilih(?:an)?|nomor)\s+)?(\d+)[.)]?$/u)?.[1];
   const normalized = words(text);
   const phrase = ` ${normalized} `;
-  const choice = menu.choices.find(option => [input, numeric].includes(exactPhrase(option.code)))
-    ?? menu.choices.find(option => words(option.label) === normalized)
-    ?? menu.choices.find(option => phrase.includes(` ${words(option.label)} `));
+  return choices.find(option => [input, numeric].includes(exactPhrase(option.code)))
+    ?? choices.find(option => words(option.label) === normalized)
+    ?? choices.find(option => phrase.includes(` ${words(option.label)} `)
+      || (option.match === 'contains' && phrase.includes(` ${words(option.code)} `)));
+}
+
+export function menuMessage(greeting, choices, hours = '') {
+  const list = choices.map(({ code, label }) => `${code} — ${label}`).join('\n');
+  return [greeting, list, 'Balas dengan kode pilihan atau tuliskan kebutuhan Anda.', hours].filter(Boolean).join('\n\n');
+}
+
+function menuAutomation(menu, away, text, { isNewChat, botPending, now }) {
+  if (isNewChat) {
+    const hours = away.enabled && outsideHours(away, now) ? away.text : '';
+    return { replies: [menuMessage(menu.greeting, menu.choices, hours)], handoff: false };
+  }
+  if (!botPending) return { replies: [], handoff: false };
+
+  const choice = matchingChoice(menu.choices, text);
   const data = choice ? `${choice.label}\n${choice.prompt}` : menu.fallback;
   return { replies: [`${data}\n\n${menu.waiting}`], handoff: true };
 }

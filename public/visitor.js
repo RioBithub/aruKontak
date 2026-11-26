@@ -7,6 +7,8 @@ const messageInput = byId('visitor-message');
 const status = byId('visitor-status');
 const feedback = byId('visitor-error');
 const panel = byId('customer-chat');
+const leaveDialog = byId('leave-dialog');
+const leaveForm = byId('leave-form');
 const topicButtons = [...document.querySelectorAll('[data-topic]')];
 const params = new URLSearchParams(location.search);
 const chatPath = code => `/chat#${code}`;
@@ -20,6 +22,11 @@ let viewingHistory = false;
 let ready = false;
 let connected = true;
 let submitting = false;
+let resume = null;
+let resumeTimer = null;
+let startingNew = false;
+let leaveDestination = '/';
+let leaving = false;
 
 function parseCode(value) {
   const input = value.trim();
@@ -53,15 +60,27 @@ function renderChoices(choices) {
 
 function render(forceScroll = false) {
   const choices = chat?.choices ?? [];
+  const saved = !viewingHistory && !chat ? resume : null;
   byId('visitor-loading').hidden = ready;
   byId('visitor-lookup').hidden = !viewingHistory;
-  byId('quick-topics').hidden = viewingHistory || Boolean(choices.length);
-  startForm.hidden = !ready || viewingHistory || Boolean(chat);
+  byId('quick-topics').hidden = viewingHistory || Boolean(choices.length) || Boolean(saved && !startingNew);
+  byId('visitor-resume').hidden = !saved;
+  startForm.hidden = !ready || viewingHistory || Boolean(chat) || (Boolean(saved) && !startingNew);
+  if (saved) {
+    const link = byId('resume-link');
+    link.href = chatPath(saved.code);
+    link.textContent = saved.closedAt ? 'Buka riwayat chat' : 'Kembali ke chat';
+    const time = timeLabel(saved.expiresAt);
+    byId('resume-until').textContent = `Bisa dibuka dari sini sampai ${time.title}.`;
+    byId('resume-new').hidden = startingNew;
+  }
   byId('visitor-thread').hidden = !chat;
   if (chat) {
     byId('visitor-code').textContent = chat.code;
     replyForm.hidden = Boolean(chat.closedAt);
     byId('visitor-closed').hidden = !chat.closedAt;
+    byId('leave-chat').hidden = Boolean(chat.closedAt);
+    byId('leave-chat').disabled = submitting;
     renderMessages(byId('visitor-messages'), chat, 'visitor', forceScroll);
   }
   renderChoices(choices);
@@ -101,6 +120,7 @@ async function loadHistory(message = '') {
   code = null;
   ready = true;
   viewingHistory = true;
+  clearTimeout(resumeTimer);
   if (location.pathname !== '/riwayat') history.replaceState(null, '', '/riwayat');
   notice(feedback, message, Boolean(message));
   render();
@@ -168,7 +188,16 @@ async function refresh() {
   readRequest = controller;
   try {
     const data = await api('/api/visitor/chat', undefined, controller.signal, code);
-    if (readRequest === controller && !viewingHistory) showChat(data.chat);
+    if (readRequest === controller && !viewingHistory) {
+      resume = data.resume ?? null;
+      clearTimeout(resumeTimer);
+      if (resume) resumeTimer = setTimeout(() => {
+        resume = null;
+        render();
+        void refresh();
+      }, resume.remainingMs);
+      showChat(data.chat);
+    }
   } catch (error) {
     if (readRequest !== controller || viewingHistory) return;
     if (error.status === 404 && code) {
@@ -220,7 +249,12 @@ async function send(form, path, payload, clearDraft = true) {
 
 startForm.addEventListener('submit', event => {
   event.preventDefault();
-  void send(startForm, '/api/visitor/chat', { name: byId('visitor-name').value, text: byId('visitor-first').value });
+  void send(startForm, '/api/visitor/chat', {
+    name: byId('visitor-name').value,
+    phone: byId('visitor-phone').value,
+    email: byId('visitor-email').value,
+    text: byId('visitor-first').value,
+  });
 });
 replyForm.addEventListener('submit', event => {
   event.preventDefault();
@@ -230,6 +264,49 @@ choicePanel.addEventListener('click', event => {
   const choice = event.target.closest('[data-choice]');
   if (choice && chat?.botPending) {
     void send(replyForm, '/api/visitor/message', { chatId: chat.id, text: choice.dataset.choice }, false);
+  }
+});
+
+byId('resume-new').addEventListener('click', () => {
+  startingNew = true;
+  render();
+  byId('visitor-name').focus();
+});
+
+function askToLeave(destination) {
+  leaveDestination = destination;
+  notice(byId('leave-note'));
+  leaveDialog.showModal();
+  byId('cancel-leave').focus();
+}
+
+byId('leave-chat').addEventListener('click', () => askToLeave('/'));
+byId('cancel-leave').addEventListener('click', () => leaveDialog.close());
+leaveDialog.addEventListener('cancel', event => {
+  if (leaving) event.preventDefault();
+});
+for (const link of document.querySelectorAll('.site-bar a')) {
+  link.addEventListener('click', event => {
+    if (!chat || chat.closedAt || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    if (!submitting) askToLeave(link.getAttribute('href'));
+  });
+}
+
+leaveForm.addEventListener('submit', async event => {
+  event.preventDefault();
+  if (leaving || !chat) return;
+  leaving = true;
+  const buttons = [...leaveForm.querySelectorAll('button')];
+  for (const button of buttons) button.disabled = true;
+  try {
+    await api('/api/visitor/leave', { chatId: chat.id }, undefined, code);
+    location.assign(leaveDestination);
+  } catch (error) {
+    notice(byId('leave-note'), error.message, true);
+  } finally {
+    leaving = false;
+    for (const button of buttons) button.disabled = false;
   }
 });
 
@@ -280,6 +357,7 @@ window.addEventListener('pagehide', () => {
   readRequest?.abort();
   readRequest = null;
   clearTimeout(retryTimer);
+  clearTimeout(resumeTimer);
 });
 window.addEventListener('pageshow', event => {
   if (!event.persisted) return;

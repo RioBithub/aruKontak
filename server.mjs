@@ -5,6 +5,7 @@ import { isIP } from 'node:net';
 import { parseArgs, promisify } from 'node:util';
 import * as store from './store.mjs';
 import { validateRules } from './rules.mjs';
+import { previewWorkflow, validateWorkflow } from './workflow.mjs';
 
 const { values: args } = parseArgs({
   options: { host: { type: 'string' }, port: { type: 'string' }, strictPort: { type: 'boolean' } },
@@ -30,6 +31,7 @@ const visitorCookie = 'jrcare_visitor';
 const staffAge = 12 * 60 * 60;
 const visitorAge = 30 * 24 * 60 * 60;
 const bodyLimit = 96 * 1024;
+const diagramBodyLimit = 640 * 1024;
 const rateBuckets = new Map();
 let lastPruned = 0;
 const updateStreams = new Set();
@@ -46,6 +48,7 @@ const staticFiles = new Map([
   ['/common.js', ['common.js', 'text/javascript']],
   ['/visitor.js', ['visitor.js', 'text/javascript']],
   ['/staff.js', ['staff.js', 'text/javascript']],
+  ['/workflow.js', ['workflow.js', 'text/javascript']],
   ['/assets/jrcare-logo.png', ['assets/jrcare-logo.png', 'image/png']],
   ['/assets/plus-jakarta-sans.woff2', ['assets/plus-jakarta-sans.woff2', 'font/woff2']],
 ].map(([path, [file, type]]) => [path, {
@@ -88,11 +91,16 @@ function newToken() {
   return randomBytes(32).toString('base64url');
 }
 
-function readCookie(request, key) {
+function cookieToken(request, key) {
   const prefix = `${key}=`;
   const cookie = request.headers.cookie?.split(/;\s*/).find(part => part.startsWith(prefix));
   const token = cookie?.slice(prefix.length);
-  return token && /^[\w-]{43}$/.test(token) ? hash(token) : null;
+  return token && /^[\w-]{43}$/.test(token) ? token : null;
+}
+
+function readCookie(request, key) {
+  const token = cookieToken(request, key);
+  return token ? hash(token) : null;
 }
 
 function setCookie(response, name, token, age, path) {
@@ -153,6 +161,24 @@ function nameOf(value) {
     throw new HttpError(400, 'Masukkan nama dalam satu baris, maksimal 80 karakter.');
   }
   return name;
+}
+
+function phoneOf(value) {
+  const phone = typeof value === 'string' && value.length <= 40
+    ? value.trim().replace(/[\s().-]/gu, '') : '';
+  if (!/^\+?\d{7,15}$/.test(phone) || phone.startsWith('+0')) {
+    throw new HttpError(400, 'Masukkan nomor telepon yang bisa dihubungi, 7–15 digit.');
+  }
+  return phone;
+}
+
+function emailOf(value) {
+  if (value === undefined || value === null || (typeof value === 'string' && !value.trim())) return null;
+  const email = typeof value === 'string' ? value.trim() : '';
+  if (email.length > 254 || !/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i.test(email)) {
+    throw new HttpError(400, 'Periksa alamat email Anda.');
+  }
+  return email;
 }
 
 function messageOf(value) {
@@ -236,16 +262,16 @@ function verifyOrigin(request) {
   if (request.headers.origin !== expected) throw new HttpError(403, 'Permintaan harus berasal dari aplikasi JRCare.');
 }
 
-async function jsonBody(request) {
+async function jsonBody(request, maxBytes = bodyLimit) {
   if (request.headers['content-type']?.split(';', 1)[0] !== 'application/json') {
     throw new HttpError(415, 'Gunakan format JSON.');
   }
-  if (Number(request.headers['content-length']) > bodyLimit) throw new HttpError(413, 'Ukuran kiriman terlalu besar.');
+  if (Number(request.headers['content-length']) > maxBytes) throw new HttpError(413, 'Ukuran kiriman terlalu besar.');
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > bodyLimit) throw new HttpError(413, 'Ukuran kiriman terlalu besar.');
+    if (size > maxBytes) throw new HttpError(413, 'Ukuran kiriman terlalu besar.');
     chunks.push(chunk);
   }
   let value;
@@ -258,9 +284,9 @@ function readApi(request, response, url) {
   switch (url.pathname) {
     case '/api/visitor/chat': {
       const access = visitorAccess(request);
-      if (!access.key && !access.code) setCookie(response, visitorCookie, newToken(), visitorAge, '/api/visitor');
-      const chat = store.visitorChat(db, access);
-      return { chat: access.code ? requireVisitorChat(chat) : chat };
+      if (!access.key) setCookie(response, visitorCookie, newToken(), visitorAge, '/api/visitor');
+      if (access.code) return { chat: requireVisitorChat(store.visitorChat(db, access)) };
+      return store.visitorSession(db, access.key);
     }
     case '/api/visitor/history':
       return { chats: store.visitorHistory(db, readCookie(request, visitorCookie)) };
@@ -280,6 +306,9 @@ function readApi(request, response, url) {
     case '/api/staff/rules':
       requireStaff(request, { admin: true });
       return { rules: store.getRules(db) };
+    case '/api/staff/workflow':
+      requireStaff(request, { admin: true });
+      return store.diagramSettings(db);
     default:
       throw new HttpError(404, 'Halaman tidak ditemukan.');
   }
@@ -297,7 +326,8 @@ async function writeApi(request, response, path, body, changedChats) {
       const message = messageOf(body.text);
       const requestKey = requestKeyOf(body.requestKey);
       if (path === '/api/visitor/chat') {
-        const chat = store.startChat(db, access.key, nameOf(body.name), message, requestKey);
+        const contact = { phone: phoneOf(body.phone), email: emailOf(body.email) };
+        const chat = store.startChat(db, access.key, nameOf(body.name), message, requestKey, contact);
         changedChats.add(chat.id);
         return { chat };
       }
@@ -305,6 +335,14 @@ async function writeApi(request, response, path, body, changedChats) {
       checkChatResult(store.postVisitorMessage(db, access, id, message, requestKey));
       changedChats.add(id);
       return { chat: store.visitorChat(db, { ...access, id }) };
+    }
+    case '/api/visitor/leave': {
+      limit(request, 'visitor', 180, 60_000);
+      const access = visitorAccess(request);
+      if (!access.key) throw new HttpError(409, 'Muat ulang chat sebelum meninggalkan halaman.');
+      checkChatResult(store.leaveChat(db, access, idOf(body.chatId)));
+      setCookie(response, visitorCookie, cookieToken(request, visitorCookie), visitorAge, '/api/visitor');
+      return {};
     }
     case '/api/staff/setup': {
       limit(request, 'setup', 8, 300_000);
@@ -373,8 +411,46 @@ async function writeApi(request, response, path, body, changedChats) {
       let rules;
       try { rules = validateRules({ ...store.getRules(db), ...body }); }
       catch (error) { throw new HttpError(400, error.message); }
+      if (rules.mode === 'workflow' && !store.diagramSettings(db).publishedVersion) {
+        throw new HttpError(409, 'Terbitkan diagram alur untuk mengaktifkannya.');
+      }
       for (const id of store.saveRules(db, rules)) changedChats.add(id);
       return { rules };
+    }
+    case '/api/staff/workflow': {
+      if (!Number.isSafeInteger(body.version) || body.version < 1 || typeof body.publish !== 'boolean') {
+        throw new HttpError(400, 'Versi atau tindakan diagram tidak valid.');
+      }
+      let flow;
+      try { flow = validateWorkflow(body.flow, { complete: body.publish }); }
+      catch (error) { throw new HttpError(400, error.message); }
+      if (body.publish) {
+        const agents = new Set(store.listAgents(db).agents.map(agent => agent.id));
+        if (flow.nodes.some(node => node.agentId && !agents.has(node.agentId))) {
+          throw new HttpError(400, 'Agen prioritas harus terdaftar di JRCare.');
+        }
+      }
+      const result = store.saveDiagram(db, flow, body.version, body.publish);
+      if (!result) throw new HttpError(409, 'Diagram berubah di tab lain. Muat ulang draf sebelum menyimpan.');
+      return result;
+    }
+    case '/api/staff/workflow/preview': {
+      if (!Array.isArray(body.messages) || !body.messages.length || body.messages.length > 24) {
+        throw new HttpError(400, 'Masukkan 1–24 pesan untuk simulasi.');
+      }
+      const messages = body.messages.map(messageOf);
+      const { away } = store.getRules(db);
+      let now = new Date();
+      if (body.hours === 'outside') now = new Date('2026-01-05T23:59:00+07:00');
+      if (body.hours === 'inside' && away.days.length) {
+        const day = String(4 + away.days[0]).padStart(2, '0');
+        now = new Date(`2026-01-${day}T${away.start}:00+07:00`);
+      }
+      try {
+        const flow = validateWorkflow(body.flow, { complete: true });
+        const contact = { name: 'Pengunjung Uji', phone: '081234567890', email: body.withEmail === true ? 'uji@example.test' : '' };
+        return previewWorkflow(flow, messages, contact, away, now);
+      } catch (error) { throw new HttpError(400, error.message); }
     }
   }
 
@@ -453,7 +529,9 @@ const server = createServer({ headersTimeout: 10_000, requestTimeout: 30_000 }, 
     if (request.method === 'GET') return sendJson(response, 200, readApi(request, response, url));
     if (request.method !== 'POST') throw new HttpError(405, 'Metode tidak didukung.');
     verifyOrigin(request);
-    const body = await jsonBody(request);
+    const diagram = url.pathname === '/api/staff/workflow' || url.pathname === '/api/staff/workflow/preview';
+    if (diagram) requireStaff(request, { admin: true });
+    const body = await jsonBody(request, diagram ? diagramBodyLimit : bodyLimit);
     const changedChats = new Set();
     const result = await writeApi(request, response, url.pathname, body, changedChats);
     publishUpdates(changedChats);

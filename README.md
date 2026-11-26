@@ -2,7 +2,9 @@
 
 Live chat web Jasa Raharja Care untuk menerima pertanyaan pelanggan saat kanal WhatsApp Mekari Qontak terganggu. Pelanggan membuka `/` dan petugas masuk melalui `/petugas`. Pesan baru muncul otomatis pada kedua layar.
 
-Setiap percakapan memiliki tautan dan kode sendiri. Pelanggan dapat membuka tautan di perangkat lain atau memasukkan kode lewat **Cek chat**. Saat chat selesai, tautan tetap membuka seluruh riwayat. **Cek chat** juga menampilkan percakapan yang dimulai di browser tersebut selama sesi pelanggan tersimpan.
+Pelanggan memasukkan nomor telepon dan dapat menambahkan email saat memulai chat. Kontak tersedia di detail percakapan bagi admin dan agen yang ditugaskan.
+
+Setiap percakapan memiliki tautan dan kode sendiri. Pelanggan dapat membuka tautan di perangkat lain atau memasukkan kode lewat **Cek chat**. Setelah mengonfirmasi **Tinggalkan chat**, pelanggan dapat memilih **Kembali ke chat** dari browser yang sama selama 24 jam. Petugas tetap dapat membalas dari kotak masuk. Tautan dan kode tersedia untuk membuka riwayat setelah chat selesai atau pilihan kembali berakhir.
 
 ## Menjalankan aplikasi
 
@@ -34,9 +36,11 @@ Jika portal tidak mengirim sinyal selama 90 detik, agen dianggap offline. Chat o
 
 Alur awal mengirim dua balasan otomatis. Chat baru menerima sapaan dan pilihan layanan dalam satu pesan. Pilihan layanan atau pertanyaan berikutnya memicu satu pesan berisi format data dan pesan tunggu. Pada saat itu chat masuk antrean agen. Pelanggan bisa langsung melengkapi data atau meneruskan obrolan dengan petugas.
 
-Di **Balasan otomatis**, admin dapat menyunting sapaan, kode pilihan, nama layanan, format data per pilihan, format untuk pertanyaan lain, dan pesan tunggu. Pilihan yang sudah ditampilkan berlaku sampai petugas mengambil alih atau chat selesai. Pesan di luar jam layanan ditambahkan ke balasan pertama jika aktif. Jam layanan memakai WIB.
+Di **Diagram alur**, admin dapat menggeser dan menyambungkan blok pesan, pilihan, pengumpulan jawaban, kondisi, penugasan, dan penyelesaian chat. Kondisi dapat memeriksa jam kerja WIB, isi pesan terakhir, kontak, atau jawaban tersimpan. Gunakan variabel seperti `{{name}}` dan `{{nomor_pengajuan}}` di dalam balasan. Jawaban yang dikumpulkan terlihat di detail chat petugas. Pada blok penugasan, admin dapat menetapkan agen prioritas. Sistem memakai antrean biasa jika agen tersebut belum siap.
 
-Mode **Aturan kata kunci** menyediakan balasan berdasarkan pencocokan persis atau kata dan frasa dalam pesan, dengan penerusan sesuai aturan. Jika pesan di luar jam layanan aktif pada mode ini, pesan tersebut menggantikan sapaan awal.
+**Uji alur** menjalankan draf memakai mesin bot yang sama di percakapan uji. **Simpan draf** menyimpan perubahan untuk diedit lagi. **Terbitkan alur** memakai versi tersebut untuk chat baru. Percakapan berjalan menyimpan diagram dan jadwal yang berlaku saat chat dimulai. **Pakai template dua bubble** memuat kembali susunan awal ke draf.
+
+Di **Balasan otomatis**, admin bisa mengatur jam layanan, pemberitahuan luar jam, atau beralih ke mode dua balasan dan aturan kata kunci.
 
 ## Menjalankan di VPS
 

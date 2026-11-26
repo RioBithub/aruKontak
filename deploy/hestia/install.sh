@@ -66,7 +66,7 @@ printf 'Runtime JRCare %s dari %s\n' "$runtime_version" "$node_bin"
 
 if [[ ! -d "$release" ]]; then
   install -d -m 0755 "$stage/release"
-  git -C "$checkout" archive "$revision" -- server.mjs store.mjs rules.mjs routing.mjs public \
+  git -C "$checkout" archive "$revision" -- server.mjs store.mjs rules.mjs routing.mjs workflow.mjs public \
     | tar -x -C "$stage/release"
   "$node_bin" --check "$stage/release/server.mjs"
   mv -- "$stage/release" "$release"

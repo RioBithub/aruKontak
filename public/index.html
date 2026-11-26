@@ -53,9 +53,25 @@
         <div id="visitor-loading" class="chat-loading" aria-hidden="true">
           <span></span><span></span><span></span><span></span>
         </div>
+        <div id="visitor-resume" class="resume-chat" hidden>
+          <h3>Chat tersimpan</h3>
+          <p id="resume-until"></p>
+          <div class="chat-actions">
+            <a id="resume-link" class="primary" href="/chat">Kembali ke chat</a>
+            <button id="resume-new" class="secondary" type="button">Mulai chat baru</button>
+          </div>
+        </div>
         <form id="start-form" class="start-form" method="post" hidden>
           <label for="visitor-name">Nama Anda</label>
           <input id="visitor-name" name="name" autocomplete="name" maxlength="80" placeholder="Masukkan nama" required>
+          <div class="visitor-contact-fields">
+            <label for="visitor-phone">Nomor telepon
+              <input id="visitor-phone" name="phone" type="tel" autocomplete="tel" maxlength="40" placeholder="08… atau +62…" required>
+            </label>
+            <label for="visitor-email">Email (opsional)
+              <input id="visitor-email" name="email" type="email" autocomplete="email" maxlength="254" placeholder="nama@contoh.id">
+            </label>
+          </div>
           <label for="visitor-first">Pesan</label>
           <textarea id="visitor-first" name="message" rows="4" maxlength="2000" placeholder="Tuliskan pertanyaan Anda" required></textarea>
           <button class="primary" type="submit">Mulai chat</button>
@@ -81,7 +97,10 @@
               <p>Kode chat</p>
               <code id="visitor-code"></code>
             </div>
-            <button id="share-chat" class="secondary small" type="button">Salin tautan chat</button>
+            <div class="chat-actions">
+              <button id="share-chat" class="secondary small" type="button">Salin tautan chat</button>
+              <button id="leave-chat" class="secondary small" type="button">Tinggalkan chat</button>
+            </div>
           </div>
           <ol id="visitor-messages" class="messages" role="log" aria-label="Percakapan" aria-relevant="additions"></ol>
           <div id="visitor-choices" class="visitor-choices" role="group" aria-label="Pilihan layanan" hidden></div>
@@ -98,5 +117,14 @@
         <p id="visitor-error" class="notice" role="status" hidden></p>
       </section>
     </main>
+    <dialog id="leave-dialog" class="panel password-dialog" aria-labelledby="leave-title">
+      <h2 id="leave-title">Tinggalkan chat?</h2>
+      <p>Chat tetap berjalan di sisi petugas. Anda bisa kembali dari browser ini selama 24 jam.</p>
+      <p id="leave-note" class="notice" role="status" hidden></p>
+      <form id="leave-form" class="dialog-actions" method="post">
+        <button id="cancel-leave" class="secondary" type="button">Tetap di chat</button>
+        <button class="primary" type="submit">Tinggalkan chat</button>
+      </form>
+    </dialog>
   </body>
 </html>
