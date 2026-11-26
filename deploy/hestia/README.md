@@ -4,7 +4,7 @@ Domain pelanggan adalah `https://helpdesk-jrcare.aruraharja.co.id/`. Admin dan a
 
 ## Pasang layanan di VPS
 
-Gunakan VPS Debian atau Ubuntu yang sudah menjalankan HestiaCP dengan Nginx, baik proxy Nginx di depan Apache maupun Nginx mandiri. Pastikan domain mengarah ke VPS dan Node.js 24 atau lebih baru tersedia dari `PATH` system-wide. Installer memakai `git`, `curl`, dan `systemd`.
+Gunakan VPS Debian atau Ubuntu yang sudah menjalankan HestiaCP dengan Nginx, baik proxy Nginx di depan Apache maupun Nginx mandiri. Pastikan domain mengarah ke VPS dan `git`, `curl`, serta `systemd` tersedia.
 
 ```sh
 git clone https://github.com/RioBithub/aruKontak.git
@@ -13,6 +13,8 @@ sudo bash deploy/hestia/install.sh
 ```
 
 Installer menjalankan satu layanan `jrcare` melalui systemd pada `127.0.0.1:7310`, menyediakan template `jrcare-node` untuk Hestia, dan menyimpan database di `/var/lib/jrcare/jrcare.sqlite`. Konfigurasi dan token penyiapan awal dibuat di `/etc/jrcare/jrcare.env`. Menjalankan installer kembali memakai database dan konfigurasi yang sudah ada.
+
+JRCare memerlukan Node.js 24+ dengan `node:sqlite`. Jika VPS memakai Node.js 20 atau runtime global lain yang belum kompatibel, installer mengunduh Node.js 24.22.3 resmi untuk Linux x64 atau arm64, memeriksa SHA-256, dan menyimpannya di `/opt/jrcare/runtime/`. Layanan `jrcare` memakai runtime tersebut lewat `/opt/jrcare/node`.
 
 ## Kaitkan domain dan HTTPS
 
@@ -28,6 +30,14 @@ Installer menjalankan satu layanan `jrcare` melalui systemd pada `127.0.0.1:7310
    Respons yang diharapkan adalah `{"status":"ok","service":"jrcare"}`. Periksa `sudo nginx -t` dan `sudo journalctl -u jrcare -n 80` jika domain masih menampilkan halaman bawaan atau gateway error.
 
 Referensi HestiaCP untuk [template dan rebuild domain](https://hestiacp.com/docs/server-administration/web-templates) dan [sertifikat web domain](https://hestiacp.com/docs/user-guide/web-domains).
+
+Di VPS Nginx + Apache dengan domain yang sudah dibuat atas user Hestia `aru`, template proxy juga bisa diterapkan dari terminal setelah installer berhasil.
+
+```sh
+sudo /usr/local/hestia/bin/v-change-web-domain-proxy-tpl aru helpdesk-jrcare.aruraharja.co.id jrcare-node '' no &&
+sudo nginx -t && sudo systemctl reload nginx &&
+curl -fsS https://helpdesk-jrcare.aruraharja.co.id/healthz
+```
 
 ## Siapkan akun dan coba chat
 
