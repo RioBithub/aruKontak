@@ -20,7 +20,7 @@ JRCare memerlukan Node.js 24+ dengan `node:sqlite`. Jika VPS memakai Node.js 20 
 
 1. Di **Web** HestiaCP, buka `helpdesk-jrcare.aruraharja.co.id` atau tambahkan sebagai **Web Domain** jika belum ada.
 2. Di **Advanced Options**, pilih `jrcare-node` pada **Proxy Template** untuk Nginx + Apache atau **Web Template Nginx** untuk Nginx mandiri. Simpan perubahan.
-3. Pertahankan sertifikat HTTPS yang sudah valid. Untuk domain tanpa sertifikat, aktifkan **SSL** dan **Use Let’s Encrypt**. Aktifkan pengalihan ke HTTPS setelah sertifikat tersedia.
+3. Pertahankan sertifikat HTTPS yang sudah mencakup `helpdesk-jrcare.aruraharja.co.id`. Jika sertifikat belum tersedia atau `curl` melaporkan nama host tidak cocok, terbitkan sertifikat melalui **SSL** dan **Use Let’s Encrypt**. Aktifkan pengalihan ke HTTPS setelah pemeriksaan HTTPS berhasil.
 4. Jalankan pemeriksaan ini dari VPS atau dari komputer Anda.
 
    ```sh
@@ -35,6 +35,14 @@ Di VPS Nginx + Apache dengan domain yang sudah dibuat atas user Hestia `aru`, te
 
 ```sh
 sudo /usr/local/hestia/bin/v-change-web-domain-proxy-tpl aru helpdesk-jrcare.aruraharja.co.id jrcare-node '' no &&
+sudo nginx -t && sudo systemctl reload nginx &&
+curl -fsS http://127.0.0.1:7310/healthz
+```
+
+Jika HTTPS masih menampilkan sertifikat domain lain, terbitkan sertifikat Let's Encrypt untuk hostname JRCare melalui Hestia. Gunakan nama domain yang sama saat menguji sertifikat dan layanan.
+
+```sh
+sudo /usr/local/hestia/bin/v-add-letsencrypt-domain aru helpdesk-jrcare.aruraharja.co.id '' &&
 sudo nginx -t && sudo systemctl reload nginx &&
 curl -fsS https://helpdesk-jrcare.aruraharja.co.id/healthz
 ```
