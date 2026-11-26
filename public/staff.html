@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex">
+    <title>Portal Petugas • JRCare</title>
+    <link rel="stylesheet" href="/style.css">
+    <script type="module" src="/staff.js"></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="site-bar">
+        <a class="brand" href="/petugas" aria-label="JRCare, portal petugas">
+          <span class="brand-mark" aria-hidden="true">JR</span>
+          <span><strong>JRCare</strong><small>Portal petugas</small></span>
+        </a>
+        <div class="header-actions">
+          <a class="header-link" href="/">Live chat pelanggan</a>
+          <div id="staff-account" class="staff-account" hidden>
+            <span id="account-name"></span>
+            <button id="logout" type="button" class="secondary small">Keluar</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main id="auth" class="auth-layout">
+      <section class="panel auth-card" aria-labelledby="auth-title">
+        <h1 id="auth-title">Portal petugas</h1>
+        <p id="auth-intro">Memeriksa sesi…</p>
+        <p id="auth-error" class="notice" role="status" hidden></p>
+        <form id="login-form" method="post" hidden>
+          <label for="login-username">Nama pengguna</label>
+          <input id="login-username" name="username" autocomplete="username" maxlength="40" autocapitalize="none" required>
+          <label for="login-password">Sandi</label>
+          <input id="login-password" type="password" name="password" autocomplete="current-password" maxlength="128" required>
+          <button class="primary" type="submit">Masuk</button>
+        </form>
+        <form id="setup-form" method="post" hidden>
+          <label for="setup-token">Token penyiapan</label>
+          <input id="setup-token" type="password" name="token" autocomplete="off" maxlength="128" required>
+          <label for="setup-password">Sandi untuk admin</label>
+          <input id="setup-password" type="password" name="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+          <button class="primary" type="submit">Buat akun admin</button>
+        </form>
+        <form id="change-form" method="post" hidden>
+          <label for="new-password">Sandi baru</label>
+          <input id="new-password" type="password" name="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+          <button class="primary" type="submit">Simpan sandi dan masuk</button>
+        </form>
+      </section>
+    </main>
+
+    <main id="office" class="office" hidden>
+      <div class="office-top">
+        <nav class="office-nav" aria-label="Menu petugas">
+          <button type="button" data-view="inbox" aria-controls="inbox" aria-current="page">Kotak masuk</button>
+          <button type="button" data-view="agents" aria-controls="agents" data-admin>Akun agen</button>
+          <button type="button" data-view="rules" aria-controls="rules" data-admin>Balasan otomatis</button>
+        </nav>
+        <button id="copy-link" class="secondary small" type="button">Salin tautan pelanggan</button>
+      </div>
+      <p id="office-notice" class="notice" role="status" hidden></p>
+
+      <div id="inbox" class="desk-grid">
+        <aside class="panel queue" aria-labelledby="queue-title">
+          <div class="queue-head">
+            <h1 id="queue-title">Kotak masuk</h1>
+            <div class="queue-filters" role="group" aria-label="Filter percakapan">
+              <button type="button" data-filter="active" aria-pressed="true">Aktif <span id="count-active">0</span></button>
+              <button type="button" data-filter="unassigned" aria-pressed="false" data-admin>Antrean <span id="count-unassigned">0</span></button>
+              <button type="button" data-filter="closed" aria-pressed="false">Selesai <span id="count-closed">0</span></button>
+            </div>
+          </div>
+          <div id="queue-list" class="queue-list" aria-label="Daftar percakapan"></div>
+        </aside>
+
+        <section class="panel desk-thread" aria-label="Isi percakapan">
+          <div id="thread-empty" class="thread-empty">
+            <span class="chat-symbol" aria-hidden="true"></span>
+            <p>Pilih chat dari kotak masuk.</p>
+          </div>
+          <div id="thread-view" class="thread-view" hidden>
+            <header class="thread-header">
+              <div>
+                <h2 id="thread-name"></h2>
+                <p id="thread-status"></p>
+              </div>
+              <div id="thread-tools" class="thread-tools">
+                <label class="sr-only" for="assign-select">Tugaskan agen</label>
+                <select id="assign-select" aria-label="Tugaskan agen" data-admin></select>
+                <button id="close-chat" type="button" class="secondary small">Selesaikan</button>
+              </div>
+            </header>
+            <ol id="staff-messages" class="messages" role="log" aria-label="Percakapan pelanggan" aria-relevant="additions"></ol>
+            <form id="staff-reply" class="composer" method="post">
+              <label class="sr-only" for="staff-message">Balasan petugas</label>
+              <textarea id="staff-message" name="message" rows="2" maxlength="2000" placeholder="Tulis balasan untuk pelanggan" required></textarea>
+              <button class="primary" type="submit">Kirim</button>
+            </form>
+          </div>
+        </section>
+      </div>
+
+      <section id="agents" class="settings-layout" aria-labelledby="agents-title" hidden>
+        <div class="panel settings-card">
+          <h1 id="agents-title">Akun agen</h1>
+          <p>Buat sandi sementara untuk mengaktifkan akun. Agen akan memilih sandi baru saat pertama kali masuk.</p>
+          <ul id="agent-list" class="agent-list" aria-label="Daftar agen"></ul>
+        </div>
+        <form id="agent-form" class="panel settings-card form-stack" method="post" hidden>
+          <h2>Tambah agen</h2>
+          <label for="agent-name">Nama tampilan</label>
+          <input id="agent-name" name="name" maxlength="80" required>
+          <label for="agent-username">Nama pengguna</label>
+          <input id="agent-username" name="username" pattern="[a-zA-Z0-9][a-zA-Z0-9._\-]{2,39}" minlength="3" maxlength="40" autocapitalize="none" autocomplete="off" required>
+          <button class="primary" type="submit">Buat akun</button>
+        </form>
+      </section>
+
+      <section id="rules" class="rules-layout" aria-labelledby="rules-title" hidden>
+        <h1 id="rules-title">Balasan otomatis</h1>
+        <form id="rules-form" method="post" hidden>
+          <section class="panel settings-card form-stack" aria-labelledby="welcome-title">
+            <h2 id="welcome-title">Sapaan</h2>
+            <label class="check"><input id="welcome-enabled" type="checkbox"> Kirim sapaan pada chat baru</label>
+            <label for="welcome-text">Pesan sapaan</label>
+            <textarea id="welcome-text" rows="3" maxlength="1000"></textarea>
+          </section>
+          <section class="panel settings-card form-stack" aria-labelledby="away-title">
+            <h2 id="away-title">Di luar jam layanan</h2>
+            <p>Di luar jam yang dipilih, pesan ini menggantikan sapaan pada chat baru.</p>
+            <label class="check"><input id="away-enabled" type="checkbox"> Kirim pesan di luar jam layanan</label>
+            <fieldset class="days" id="open-days">
+              <legend>Hari layanan</legend>
+              <label class="check"><input type="checkbox" value="1"> Senin</label>
+              <label class="check"><input type="checkbox" value="2"> Selasa</label>
+              <label class="check"><input type="checkbox" value="3"> Rabu</label>
+              <label class="check"><input type="checkbox" value="4"> Kamis</label>
+              <label class="check"><input type="checkbox" value="5"> Jumat</label>
+              <label class="check"><input type="checkbox" value="6"> Sabtu</label>
+              <label class="check"><input type="checkbox" value="7"> Minggu</label>
+            </fieldset>
+            <div class="times">
+              <label>Jam mulai (WIB)<input id="open-start" type="time" required></label>
+              <label>Jam selesai (WIB)<input id="open-end" type="time" required></label>
+            </div>
+            <label for="away-text">Pesan di luar jam layanan</label>
+            <textarea id="away-text" rows="3" maxlength="1000"></textarea>
+          </section>
+          <section class="panel settings-card form-stack" aria-labelledby="keyword-title">
+            <h2 id="keyword-title">Kata kunci</h2>
+            <p>JRCare mengirim balasan dari kata atau frasa pertama yang cocok, sesuai urutan di bawah.</p>
+            <div id="keywords" class="keywords"></div>
+            <button id="add-keyword" class="secondary" type="button">Tambah kata kunci</button>
+          </section>
+          <div class="rules-actions">
+            <button class="primary" type="submit">Simpan balasan otomatis</button>
+            <p id="rules-note" class="notice" role="status" hidden></p>
+          </div>
+        </form>
+      </section>
+    </main>
+
+    <dialog id="password-dialog" class="panel password-dialog" aria-labelledby="password-title">
+      <h2 id="password-title">Sandi sementara</h2>
+      <p>Berikan nama pengguna dan sandi ini kepada agen. Sandi ditampilkan sekali.</p>
+      <dl>
+        <dt>Nama pengguna</dt><dd id="temporary-username"></dd>
+        <dt>Sandi</dt><dd><code id="temporary-password"></code></dd>
+      </dl>
+      <p id="password-note" class="notice" role="status" hidden></p>
+      <form method="dialog" class="dialog-actions">
+        <button id="copy-password" class="primary" type="button">Salin kredensial</button>
+        <button class="secondary" type="submit">Tutup</button>
+      </form>
+    </dialog>
+    <template id="keyword-template">
+      <article class="keyword-row">
+        <label>Kata atau frasa<input class="keyword-word" maxlength="64" required></label>
+        <label>Isi balasan<textarea class="keyword-reply" rows="2" maxlength="1000" required></textarea></label>
+        <button class="secondary small remove-keyword" type="button">Hapus aturan</button>
+      </article>
+    </template>
+  </body>
+</html>

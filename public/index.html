@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Hubungi petugas Jasa Raharja Care melalui live chat.">
+    <title>Live Chat • JRCare</title>
+    <link rel="stylesheet" href="/style.css">
+    <script type="module" src="/visitor.js"></script>
+  </head>
+  <body class="visitor-page">
+    <header class="site-header">
+      <div class="site-bar">
+        <a class="brand" href="/" aria-label="JRCare, live chat">
+          <span class="brand-mark" aria-hidden="true">JR</span>
+          <span><strong>JRCare</strong><small>Jasa Raharja Care</small></span>
+        </a>
+        <a class="header-link" href="/petugas">Portal petugas</a>
+      </div>
+    </header>
+
+    <main class="visitor-layout">
+      <div class="visitor-intro">
+        <h1>Ada yang bisa<br class="desktop-break"> kami bantu?</h1>
+        <p>Tulis pertanyaan Anda untuk terhubung dengan petugas Jasa Raharja Care.</p>
+      </div>
+
+      <section class="panel chat-card" aria-labelledby="chat-title">
+        <header class="chat-card-header">
+          <span class="chat-symbol" aria-hidden="true"></span>
+          <div>
+            <h2 id="chat-title">Live chat</h2>
+            <p id="visitor-status" role="status">Menyambungkan…</p>
+          </div>
+        </header>
+
+        <form id="start-form" class="start-form" method="post" hidden>
+          <label for="visitor-name">Nama Anda</label>
+          <input id="visitor-name" name="name" autocomplete="name" maxlength="80" placeholder="Masukkan nama" required>
+          <label for="visitor-first">Pesan</label>
+          <textarea id="visitor-first" name="message" rows="4" maxlength="2000" placeholder="Tuliskan pertanyaan Anda" required></textarea>
+          <button class="primary" type="submit">Mulai chat</button>
+        </form>
+
+        <div id="visitor-thread" class="visitor-thread" hidden>
+          <ol id="visitor-messages" class="messages" role="log" aria-label="Percakapan" aria-relevant="additions"></ol>
+          <form id="visitor-reply" class="composer" method="post" hidden>
+            <label class="sr-only" for="visitor-message">Pesan</label>
+            <textarea id="visitor-message" name="message" rows="2" maxlength="2000" placeholder="Tulis pesan Anda" required></textarea>
+            <button class="primary" type="submit">Kirim</button>
+          </form>
+          <div id="visitor-closed" class="closed-notice" hidden>
+            <p>Chat ini sudah selesai.</p>
+            <button id="new-chat" class="secondary" type="button">Mulai chat baru</button>
+          </div>
+        </div>
+        <p id="visitor-error" class="notice" role="status" hidden></p>
+      </section>
+    </main>
+  </body>
+</html>

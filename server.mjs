@@ -1,0 +1,350 @@
+import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { isIP } from 'node:net';
+import { parseArgs, promisify } from 'node:util';
+import * as store from './store.mjs';
+import { validateRules } from './rules.mjs';
+
+const { values: args } = parseArgs({
+  options: { host: { type: 'string' }, port: { type: 'string' }, strictPort: { type: 'boolean' } },
+});
+const host = args.host || process.env.HOST || '127.0.0.1';
+const port = Number(args.port || process.env.PORT || 3000);
+const setupToken = process.env.JRCARE_SETUP_TOKEN || '';
+const publicOrigin = process.env.JRCARE_ORIGIN ? new URL(process.env.JRCARE_ORIGIN).origin : '';
+const secureCookies = publicOrigin.startsWith('https://');
+const trustProxy = process.env.JRCARE_TRUST_PROXY === '1';
+if (process.env.NODE_ENV === 'production' && !secureCookies) {
+  throw new Error('JRCARE_ORIGIN harus berupa alamat HTTPS di produksi.');
+}
+if (setupToken && (setupToken.length < 32 || setupToken.length > 128)) {
+  throw new Error('JRCARE_SETUP_TOKEN harus berisi 32–128 karakter.');
+}
+
+const db = store.openStore(process.env.JRCARE_DATABASE || './data/jrcare.sqlite');
+const scryptAsync = promisify(scrypt);
+const missingPasswordHash = `${'0'.repeat(32)}:${'0'.repeat(128)}`;
+const staffCookie = 'jrcare_staff';
+const visitorCookie = 'jrcare_visitor';
+const staffAge = 12 * 60 * 60;
+const visitorAge = 30 * 24 * 60 * 60;
+const bodyLimit = 96 * 1024;
+const rateBuckets = new Map();
+let lastPruned = 0;
+
+const staticFiles = new Map([
+  ['/', ['index.html', 'text/html']],
+  ['/petugas', ['staff.html', 'text/html']],
+  ['/style.css', ['style.css', 'text/css']],
+  ['/common.js', ['common.js', 'text/javascript']],
+  ['/visitor.js', ['visitor.js', 'text/javascript']],
+  ['/staff.js', ['staff.js', 'text/javascript']],
+].map(([path, [file, type]]) => [path, {
+  bytes: readFileSync(new URL(`./public/${file}`, import.meta.url)), type,
+}]));
+
+class HttpError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+function limit(request, action, max, duration) {
+  const now = Date.now();
+  if (now - lastPruned > 60_000) {
+    for (const [key, bucket] of rateBuckets) if (bucket.until <= now) rateBuckets.delete(key);
+    lastPruned = now;
+  }
+  const forwarded = request.headers['x-real-ip'];
+  const ip = trustProxy && typeof forwarded === 'string' && isIP(forwarded)
+    ? forwarded : request.socket.remoteAddress;
+  const key = `${action}:${ip}`;
+  let bucket = rateBuckets.get(key);
+  if (!bucket || bucket.until <= now) {
+    if (!bucket && rateBuckets.size >= 10_000) throw new HttpError(429, 'Terlalu banyak permintaan. Coba lagi sebentar.');
+    bucket = { count: 0, until: now + duration };
+    rateBuckets.set(key, bucket);
+  }
+  if (++bucket.count > max) throw new HttpError(429, 'Terlalu banyak permintaan. Coba lagi sebentar.');
+}
+
+function hash(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function newToken() {
+  return randomBytes(32).toString('base64url');
+}
+
+function readCookie(request, key) {
+  const prefix = `${key}=`;
+  const cookie = request.headers.cookie?.split(/;\s*/).find(part => part.startsWith(prefix));
+  const token = cookie?.slice(prefix.length);
+  return token && /^[\w-]{43}$/.test(token) ? hash(token) : null;
+}
+
+function setCookie(response, name, token, age, path) {
+  response.setHeader('Set-Cookie', `${name}=${token}; Path=${path}; Max-Age=${age}; HttpOnly; SameSite=Strict${secureCookies ? '; Secure' : ''}`);
+}
+
+function newStaffSession() {
+  const token = newToken();
+  return { token, hash: hash(token), expiresAt: Date.now() + staffAge * 1000 };
+}
+
+function staffProfile({ id, name, role, username, temporary }) {
+  return { id, name, role, username, mustChangePassword: Boolean(temporary) };
+}
+
+function currentStaff(request) {
+  return store.staffBySession(db, readCookie(request, staffCookie));
+}
+
+function requireStaff(request, { admin = false, temporary = false } = {}) {
+  const user = currentStaff(request);
+  if (!user) throw new HttpError(401, 'Masuk kembali untuk melanjutkan.');
+  if (admin && user.role !== 'admin') throw new HttpError(403, 'Halaman ini hanya untuk admin.');
+  if (!temporary && user.temporary) throw new HttpError(403, 'Buat sandi baru untuk melanjutkan.');
+  return user;
+}
+
+async function passwordHash(password) {
+  const salt = randomBytes(16).toString('hex');
+  const derived = await scryptAsync(password, salt, 64);
+  return `${salt}:${derived.toString('hex')}`;
+}
+
+async function passwordMatches(password, storedHash) {
+  const [salt, derived] = (storedHash ?? missingPasswordHash).split(':');
+  const candidate = await scryptAsync(password, salt, 64);
+  return timingSafeEqual(candidate, Buffer.from(derived, 'hex')) && Boolean(storedHash);
+}
+
+function validPassword(value) {
+  if (typeof value !== 'string' || value.length < 12 || value.length > 128) {
+    throw new HttpError(400, 'Gunakan sandi 12–128 karakter.');
+  }
+  return value;
+}
+
+function usernameOf(value) {
+  const username = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (!/^[a-z0-9][a-z0-9._-]{2,39}$/.test(username)) {
+    throw new HttpError(400, 'Nama pengguna harus berisi 3–40 huruf, angka, titik, garis bawah, atau tanda hubung.');
+  }
+  return username;
+}
+
+function nameOf(value) {
+  const name = typeof value === 'string' ? value.trim() : '';
+  if (!name || name.length > 80 || /[\p{Cc}\u2028\u2029]/u.test(name)) {
+    throw new HttpError(400, 'Masukkan nama dalam satu baris, maksimal 80 karakter.');
+  }
+  return name;
+}
+
+function messageOf(value) {
+  const body = typeof value === 'string' ? value.trim() : '';
+  if (!body || body.length > 2_000) throw new HttpError(400, 'Isi pesan, maksimal 2.000 karakter.');
+  return body;
+}
+
+function requestKeyOf(value) {
+  if (typeof value !== 'string' || !/^[a-f\d]{32}$/.test(value)) throw new HttpError(400, 'Identitas pesan tidak valid.');
+  return value;
+}
+
+function idOf(value) {
+  const number = Number(value);
+  if (!/^\d+$/.test(String(value)) || !Number.isSafeInteger(number) || number < 1) {
+    throw new HttpError(400, 'Nomor chat atau akun tidak valid.');
+  }
+  return number;
+}
+
+function checkChatResult(result) {
+  if (result === 'missing') throw new HttpError(404, 'Chat tidak tersedia.');
+  if (result === 'closed') throw new HttpError(409, 'Chat ini sudah selesai.');
+  if (result === 'agent') throw new HttpError(400, 'Pilih salah satu agen yang terdaftar.');
+}
+
+function verifyOrigin(request) {
+  const expected = publicOrigin || `http://${request.headers.host}`;
+  if (request.headers.origin !== expected) throw new HttpError(403, 'Permintaan harus berasal dari aplikasi JRCare.');
+}
+
+async function jsonBody(request) {
+  if (request.headers['content-type']?.split(';', 1)[0] !== 'application/json') {
+    throw new HttpError(415, 'Gunakan format JSON.');
+  }
+  if (Number(request.headers['content-length']) > bodyLimit) throw new HttpError(413, 'Ukuran kiriman terlalu besar.');
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > bodyLimit) throw new HttpError(413, 'Ukuran kiriman terlalu besar.');
+    chunks.push(chunk);
+  }
+  let value;
+  try { value = JSON.parse(Buffer.concat(chunks)); } catch { throw new HttpError(400, 'Isi permintaan tidak valid.'); }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, 'Isi permintaan tidak valid.');
+  return value;
+}
+
+function readApi(request, response, url) {
+  switch (url.pathname) {
+    case '/api/visitor/chat': {
+      const key = readCookie(request, visitorCookie);
+      if (!key) setCookie(response, visitorCookie, newToken(), visitorAge, '/api/visitor');
+      return { chat: key ? store.visitorChat(db, key) : null };
+    }
+    case '/api/staff/session': {
+      const user = currentStaff(request);
+      const setup = store.hasAdmin(db) ? 'complete' : setupToken ? 'ready' : 'waiting';
+      return { user: user ? staffProfile(user) : null, setup };
+    }
+    case '/api/staff/inbox': {
+      const user = requireStaff(request);
+      const id = url.searchParams.has('chat') ? idOf(url.searchParams.get('chat')) : null;
+      return store.inbox(db, user, id);
+    }
+    case '/api/staff/agents':
+      requireStaff(request, { admin: true });
+      return { agents: store.listAgents(db) };
+    case '/api/staff/rules':
+      requireStaff(request, { admin: true });
+      return { rules: store.getRules(db) };
+    default:
+      throw new HttpError(404, 'Halaman tidak ditemukan.');
+  }
+}
+
+async function writeApi(request, response, path, body) {
+  switch (path) {
+    case '/api/visitor/chat':
+    case '/api/visitor/message': {
+      limit(request, 'visitor', 180, 60_000);
+      const key = readCookie(request, visitorCookie);
+      if (!key) throw new HttpError(409, 'Sesi chat belum siap. Muat ulang halaman lalu coba lagi.');
+      const message = messageOf(body.text);
+      const requestKey = requestKeyOf(body.requestKey);
+      if (path === '/api/visitor/chat') return { chat: store.startChat(db, key, nameOf(body.name), message, requestKey) };
+      checkChatResult(store.postVisitorMessage(db, key, idOf(body.chatId), message, requestKey));
+      return { chat: store.visitorChat(db, key) };
+    }
+    case '/api/staff/setup': {
+      limit(request, 'setup', 8, 300_000);
+      if (store.hasAdmin(db)) throw new HttpError(409, 'Akun admin sudah dibuat.');
+      if (!setupToken || typeof body.token !== 'string'
+          || !timingSafeEqual(Buffer.from(hash(body.token), 'hex'), Buffer.from(hash(setupToken), 'hex'))) {
+        throw new HttpError(403, 'Token penyiapan tidak cocok.');
+      }
+      const digest = await passwordHash(validPassword(body.password));
+      const session = newStaffSession();
+      const admin = store.setupAdmin(db, digest, session);
+      if (!admin) throw new HttpError(409, 'Akun admin sudah dibuat.');
+      setCookie(response, staffCookie, session.token, staffAge, '/api/staff');
+      return { user: staffProfile(admin) };
+    }
+    case '/api/staff/login': {
+      limit(request, 'login', 16, 300_000);
+      const username = usernameOf(body.username);
+      const password = typeof body.password === 'string' && body.password.length <= 128 ? body.password : '';
+      const user = store.staffByUsername(db, username);
+      if (!await passwordMatches(password, user?.passwordHash)) throw new HttpError(401, 'Nama pengguna atau sandi salah.');
+      const session = newStaffSession();
+      const loggedIn = store.loginStaff(db, user, session);
+      if (!loggedIn) throw new HttpError(401, 'Nama pengguna atau sandi salah.');
+      setCookie(response, staffCookie, session.token, staffAge, '/api/staff');
+      return { user: staffProfile(loggedIn) };
+    }
+    case '/api/staff/logout':
+      store.removeSession(db, readCookie(request, staffCookie));
+      setCookie(response, staffCookie, '', 0, '/api/staff');
+      return {};
+    case '/api/staff/password': {
+      const user = requireStaff(request, { temporary: true });
+      if (!user.temporary) throw new HttpError(409, 'Akun ini sudah menggunakan sandi tetap.');
+      const password = validPassword(body.password);
+      if (await passwordMatches(password, user.passwordHash)) throw new HttpError(400, 'Pilih sandi baru yang berbeda.');
+      const digest = await passwordHash(password);
+      const session = newStaffSession();
+      const updated = store.replaceTemporaryPassword(db, user, digest, session);
+      if (!updated) throw new HttpError(401, 'Sandi sementara berubah. Silakan masuk kembali.');
+      setCookie(response, staffCookie, session.token, staffAge, '/api/staff');
+      return { user: staffProfile(updated) };
+    }
+    case '/api/staff/agents': {
+      requireStaff(request, { admin: true });
+      const agent = store.createAgent(db, nameOf(body.name), usernameOf(body.username));
+      if (!agent) throw new HttpError(409, 'Nama pengguna sudah dipakai.');
+      return { agent };
+    }
+    case '/api/staff/rules': {
+      requireStaff(request, { admin: true });
+      let rules;
+      try { rules = validateRules(body); } catch (error) { throw new HttpError(400, error.message); }
+      store.saveRules(db, rules);
+      return { rules };
+    }
+  }
+
+  const reset = path.match(/^\/api\/staff\/agents\/(\d+)\/password$/);
+  if (reset) {
+    requireStaff(request, { admin: true });
+    const id = idOf(reset[1]);
+    const temporaryPassword = randomBytes(18).toString('base64url');
+    const agent = store.setAgentPassword(db, id, await passwordHash(temporaryPassword));
+    if (!agent) throw new HttpError(404, 'Akun agen tidak ditemukan.');
+    return { agent, temporaryPassword };
+  }
+
+  const thread = path.match(/^\/api\/staff\/chats\/(\d+)\/(message|assign|close)$/);
+  if (thread) {
+    const [, rawId, action] = thread;
+    const id = idOf(rawId);
+    const user = requireStaff(request, { admin: action === 'assign' });
+    if (action === 'message') checkChatResult(store.postStaffMessage(db, user, id, messageOf(body.text), requestKeyOf(body.requestKey)));
+    if (action === 'assign') checkChatResult(store.assignChat(db, user, id, body.agentId === null ? null : idOf(body.agentId)));
+    if (action === 'close') checkChatResult(store.closeChat(db, user, id));
+    return {};
+  }
+
+  throw new HttpError(404, 'Halaman tidak ditemukan.');
+}
+
+function sendJson(response, status, data) {
+  response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+  response.end(JSON.stringify(data));
+}
+
+const server = createServer({ headersTimeout: 10_000, requestTimeout: 30_000 }, async (request, response) => {
+  response.setHeader('Content-Security-Policy', "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
+  response.setHeader('X-Content-Type-Options', 'nosniff');
+  response.setHeader('Referrer-Policy', 'no-referrer');
+  if (secureCookies) response.setHeader('Strict-Transport-Security', 'max-age=31536000');
+
+  try {
+    const url = new URL(request.url, 'http://localhost');
+    const file = staticFiles.get(url.pathname);
+    if (file && (request.method === 'GET' || request.method === 'HEAD')) {
+      response.writeHead(200, { 'Content-Type': `${file.type}; charset=utf-8`, 'Cache-Control': 'no-cache' });
+      response.end(request.method === 'HEAD' ? undefined : file.bytes);
+      return;
+    }
+    if (!url.pathname.startsWith('/api/')) throw new HttpError(404, 'Halaman tidak ditemukan.');
+    if (request.method === 'GET') return sendJson(response, 200, readApi(request, response, url));
+    if (request.method !== 'POST') throw new HttpError(405, 'Metode tidak didukung.');
+    verifyOrigin(request);
+    const body = await jsonBody(request);
+    sendJson(response, 200, await writeApi(request, response, url.pathname, body));
+  } catch (error) {
+    if (error instanceof HttpError) return sendJson(response, error.status, { error: error.message });
+    console.error(error);
+    sendJson(response, 500, { error: 'Layanan sedang bermasalah. Coba lagi sebentar.' });
+  }
+});
+
+server.listen(port, host, () => console.log(`JRCare siap di http://${host}:${server.address().port}`));
