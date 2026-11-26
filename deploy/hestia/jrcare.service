@@ -1,0 +1,23 @@
+[Unit]
+Description=JRCare live chat
+After=network.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+StateDirectory=jrcare
+StateDirectoryMode=0700
+UMask=0077
+WorkingDirectory=/opt/jrcare/current
+EnvironmentFile=/etc/jrcare/jrcare.env
+ExecStart=/opt/jrcare/node /opt/jrcare/current/server.mjs
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=20s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target

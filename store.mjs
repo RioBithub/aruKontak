@@ -2,12 +2,14 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { automaticReplies, defaultRules } from './rules.mjs';
+import { agentStates, assignmentEvents, migrateRouting, recordAssignment, routeWaitingChats, routingEnabled } from './routing.mjs';
 
 const initialAgents = ['Igun', 'Meri', 'Lingga'];
 const staffFields = 'id, username, name, role, password_hash AS passwordHash, temporary';
 const chatSummary = `
   SELECT c.id, c.visitor_name AS name, c.assignee_id AS assigneeId, a.name AS agentName,
-         c.closed_at AS closedAt, c.updated_at AS updatedAt,
+         c.closed_at AS closedAt, c.updated_at AS updatedAt, c.routing_state AS routingState,
+         c.assignment_version AS assignmentVersion,
          (SELECT substr(body, 1, 180) FROM messages
           WHERE chat_id = c.id AND sender <> 'auto' ORDER BY id DESC LIMIT 1) AS preview
   FROM chats c LEFT JOIN users a ON a.id = c.assignee_id
@@ -68,6 +70,7 @@ export function openStore(filename) {
     );
   `);
   db.prepare('INSERT OR IGNORE INTO reply_settings (id, rules) VALUES (1, ?)').run(JSON.stringify(defaultRules));
+  transaction(db, () => migrateRouting(db));
   return db;
 }
 
@@ -100,11 +103,15 @@ export function staffBySession(db, tokenHash) {
 
 function insertSession(db, userId, { hash, expiresAt }) {
   db.prepare('DELETE FROM staff_sessions WHERE expires_at <= ?').run(Date.now());
-  db.prepare('INSERT INTO staff_sessions VALUES (?, ?, ?)').run(hash, userId, expiresAt);
+  db.prepare('INSERT INTO staff_sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)').run(hash, userId, expiresAt);
 }
 
 export function removeSession(db, tokenHash) {
-  if (tokenHash) db.prepare('DELETE FROM staff_sessions WHERE token_hash = ?').run(tokenHash);
+  if (!tokenHash) return;
+  transaction(db, () => {
+    const result = db.prepare('DELETE FROM staff_sessions WHERE token_hash = ?').run(tokenHash);
+    if (result.changes) routeWaitingChats(db);
+  });
 }
 
 export function setupAdmin(db, passwordHash, session) {
@@ -141,25 +148,61 @@ export function replaceTemporaryPassword(db, user, passwordHash, session) {
   });
 }
 
-const agentFields = `id, username, name, CASE
-  WHEN password_hash IS NULL THEN 'pending' WHEN temporary = 1 THEN 'temporary' ELSE 'active' END AS status`;
-
 export function listAgents(db) {
-  return db.prepare(`SELECT ${agentFields} FROM users WHERE role = 'agent' ORDER BY id`).all();
+  return { agents: agentStates(db), autoAssign: routingEnabled(db) };
 }
 
 export function createAgent(db, name, username) {
-  return db.prepare(`INSERT INTO users (username, name, role) VALUES (?, ?, 'agent')
-    ON CONFLICT (username) DO NOTHING RETURNING ${agentFields}`).get(username, name);
+  const agent = db.prepare(`INSERT INTO users (username, name, role) VALUES (?, ?, 'agent')
+    ON CONFLICT (username) DO NOTHING RETURNING id`).get(username, name);
+  return agent ? agentStates(db).find(item => item.id === agent.id) : null;
 }
 
 export function setAgentPassword(db, id, passwordHash) {
   return transaction(db, () => {
     const agent = db.prepare(`UPDATE users SET password_hash = ?, temporary = 1
-      WHERE id = ? AND role = 'agent' RETURNING ${agentFields}`).get(passwordHash, id);
-    if (agent) db.prepare('DELETE FROM staff_sessions WHERE user_id = ?').run(id);
-    return agent;
+      WHERE id = ? AND role = 'agent' RETURNING id`).get(passwordHash, id);
+    if (agent) {
+      db.prepare('DELETE FROM staff_sessions WHERE user_id = ?').run(id);
+      routeWaitingChats(db);
+    }
+    return agent ? agentStates(db).find(item => item.id === agent.id) : null;
   });
+}
+
+export function updatePresence(db, userId, tokenHash, accepting) {
+  return transaction(db, () => {
+    const now = Date.now();
+    const session = db.prepare(`INSERT INTO agent_presence (token_hash, present_at)
+      SELECT token_hash, ? FROM staff_sessions WHERE token_hash = ? AND user_id = ? AND expires_at > ?
+      ON CONFLICT (token_hash) DO UPDATE SET present_at = excluded.present_at`)
+      .run(now, tokenHash, userId, now);
+    if (!session.changes) return null;
+    if (accepting !== undefined) db.prepare('UPDATE users SET accepting_chats = ? WHERE id = ?').run(Number(accepting), userId);
+    routeWaitingChats(db, now);
+    return agentStates(db, now).find(agent => agent.id === userId);
+  });
+}
+
+export function updateCapacity(db, agentId, capacity) {
+  return transaction(db, () => {
+    const result = db.prepare("UPDATE users SET chat_capacity = ? WHERE id = ? AND role = 'agent'").run(capacity, agentId);
+    if (!result.changes) return null;
+    routeWaitingChats(db);
+    return listAgents(db);
+  });
+}
+
+export function updateRouting(db, enabled) {
+  return transaction(db, () => {
+    db.prepare('UPDATE routing_settings SET enabled = ? WHERE id = 1').run(Number(enabled));
+    routeWaitingChats(db);
+    return listAgents(db);
+  });
+}
+
+export function runRouting(db) {
+  transaction(db, () => routeWaitingChats(db));
 }
 
 export function getRules(db) {
@@ -209,6 +252,7 @@ export function startChat(db, visitorKey, name, body, requestKey) {
       const { lastInsertRowid: id } = db.prepare('INSERT INTO chats (visitor_key, visitor_name, updated_at) VALUES (?, ?, ?)')
         .run(visitorKey, name, now);
       addVisitorMessage(db, id, name, body, requestKey, now, true);
+      routeWaitingChats(db, now);
     }
     return visitorChat(db, visitorKey);
   });
@@ -237,7 +281,10 @@ export function inbox(db, user, id) {
     ? db.prepare(`${chatSummary} ORDER BY c.updated_at DESC, c.id DESC`).all()
     : db.prepare(`${chatSummary} WHERE c.assignee_id = ? ORDER BY c.updated_at DESC, c.id DESC`).all(user.id);
   const chat = id ? staffChat(db, id, user) : null;
-  return { chats, chat: chat ? { ...chat, messages: messagesFor(db, id) } : null };
+  if (!chat) return { chats, chat: null };
+  chat.messages = messagesFor(db, id);
+  if (user.role === 'admin') chat.assignmentEvents = assignmentEvents(db, id);
+  return { chats, chat };
 }
 
 export function postStaffMessage(db, user, id, body, requestKey) {
@@ -255,13 +302,19 @@ export function postStaffMessage(db, user, id, body, requestKey) {
   });
 }
 
-export function assignChat(db, user, id, agentId) {
+export function assignChat(db, user, id, { agentId, hold, expectedVersion }) {
   return transaction(db, () => {
     const chat = staffChat(db, id, user);
     if (!chat) return 'missing';
     if (chat.closedAt) return 'closed';
+    if (expectedVersion !== undefined && expectedVersion !== chat.assignmentVersion) return 'changed';
     if (agentId && !db.prepare("SELECT 1 FROM users WHERE id = ? AND role = 'agent'").get(agentId)) return 'agent';
-    db.prepare('UPDATE chats SET assignee_id = ? WHERE id = ?').run(agentId, id);
+    const state = agentId ? 'manual' : hold ? 'hold' : 'queued';
+    if (chat.assigneeId !== agentId || chat.routingState !== state) {
+      const kind = agentId ? 'manual' : hold ? 'hold' : 'queue';
+      recordAssignment(db, chat, agentId, state, kind, user.id, Date.now());
+    }
+    routeWaitingChats(db);
     return 'ok';
   });
 }
@@ -273,6 +326,7 @@ export function closeChat(db, user, id) {
     if (!chat.closedAt) {
       const now = Date.now();
       db.prepare('UPDATE chats SET closed_at = ?, updated_at = ? WHERE id = ?').run(now, now, id);
+      routeWaitingChats(db, now);
     }
     return 'ok';
   });

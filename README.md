@@ -17,14 +17,26 @@ Simpan hasil perintah sebagai `JRCARE_SETUP_TOKEN` di `.env`, lalu jalankan `npm
 
 1. Admin membuka **Akun agen**. Igun (`igun`), Meri (`meri`), dan Lingga (`lingga`) tersedia sejak penyiapan. Admin juga bisa menambahkan agen lewat **Buat akun**.
 2. Admin memilih **Buat sandi sementara** dan menyampaikan kredensial ke agen. Agen masuk dengan sandi sementara lalu memilih sandi tetap.
-3. Bagikan URL halaman utama melalui tombol **Salin tautan pelanggan**. Pesan pelanggan masuk ke **Kotak masuk → Antrean**.
-4. Admin membuka percakapan dan memilih agen dari daftar **Tugaskan agen**. Agen melihat chat yang ditugaskan kepadanya, membalas, dan dapat menyelesaikan chat. Admin dapat melihat dan membalas semua chat.
+3. Bagikan URL halaman utama melalui tombol **Salin tautan pelanggan**. Pesan masuk mendapat agen otomatis atau menunggu di **Kotak masuk → Antrean**.
+4. Agen melihat, membalas, dan menyelesaikan chat yang ditugaskan kepadanya. Admin bisa melihat dan membalas semua chat, mengganti agen, menahan chat, dan membuka **Riwayat penugasan**.
+
+## Penugasan otomatis
+
+Pengaturan awal mengaktifkan penugasan otomatis dengan kapasitas tiga chat aktif per agen. Agen mulai menerima chat setelah mengaktifkan akun dan membuka portal. Mereka bisa menjeda chat baru lewat **Terima chat otomatis** sambil tetap menangani chat yang sudah diterima. Admin bisa mengatur kapasitas 1–20 chat per agen dan menyalakan atau mematikan penugasan di **Akun agen**.
+
+Chat tertua di antrean diutamakan. JRCare memilih agen siap dengan rasio chat aktif terhadap kapasitas terendah. Jika rasionya sama, agen yang sudah paling lama tidak mendapat penugasan dipilih dulu. Chat menunggu jika semua agen jeda, offline, atau penuh.
+
+Jika portal tidak mengirim sinyal selama 90 detik, agen dianggap offline. Chat otomatis yang belum pernah mendapat balasan petugas kembali ke antrean. Chat yang sudah dijawab dan chat yang dipilih admin tetap di agen semula. Sistem memeriksa antrean setiap 15 detik dan langsung mengisinya saat agen siap atau slot terbuka. Admin dapat memilih **Tahan di antrean** untuk menahan satu chat dan **Antrean otomatis** untuk melepaskannya kembali.
 
 ## Balasan otomatis
 
 Admin dapat mengubah pengaturan di **Balasan otomatis**. Sapaan awal aktif sejak penyiapan. Pesan di luar jam layanan dapat diaktifkan dengan hari dan jam layanan dalam WIB. Bila berlaku, pesan ini menggantikan sapaan pada awal chat. Untuk setiap pesan pelanggan, JRCare mengirim balasan dari kata atau frasa pertama yang cocok berdasarkan urutan aturan. Pencocokan mengabaikan huruf besar dan kecil.
 
-## Menjalankan di server
+## Menjalankan di VPS
+
+Untuk `helpdesk-jrcare.aruraharja.co.id`, gunakan [panduan dan installer HestiaCP](deploy/hestia/README.md). Keduanya mencakup layanan systemd, reverse proxy Nginx, HTTPS, dan database persisten.
+
+### Konfigurasi server Node.js lain
 
 Jalankan satu instance Node.js dengan direktori database persisten. Tentukan alamat HTTPS publik lewat `JRCARE_ORIGIN`, set `NODE_ENV=production`, dan teruskan HTTPS ke port aplikasi melalui reverse proxy. Gunakan `JRCARE_DATABASE` untuk menunjuk penyimpanan persisten bila direktori `./data/` bawaan tidak persisten. Aktifkan `JRCARE_TRUST_PROXY=1` hanya jika server hanya dapat dijangkau lewat reverse proxy yang mengganti header `X-Real-IP` dengan IP klien.
 

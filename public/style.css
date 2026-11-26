@@ -184,6 +184,9 @@ select {
 .auth-card form { margin-top: 1.4rem; }
 .office { width: min(100%, 88rem); padding: 1.25rem clamp(1rem, 4vw, 2.5rem) 2rem; margin: 0 auto; }
 .office-top { display: flex; align-items: center; justify-content: space-between; gap: .75rem; flex-wrap: wrap; margin-bottom: 1.125rem; }
+.agent-presence { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem .85rem; }
+.presence-status { font-size: .875rem; font-weight: 650; color: var(--muted); }
+.presence-status[data-ready='true'] { color: var(--green); }
 .office-nav { display: flex; align-items: center; flex-wrap: wrap; gap: .3rem; }
 .office-nav button, .queue-filters button {
   border: 1px solid transparent;
@@ -249,6 +252,11 @@ select {
 .thread-header p { font-size: .875rem; color: var(--muted); margin-top: .16rem; }
 .thread-tools { display: flex; align-items: center; gap: .5rem; }
 .thread-tools select { font-size: .875rem; min-height: 2.5rem; width: auto; max-width: 12rem; }
+.assignment-history { flex-basis: 100%; font-size: .875rem; color: var(--muted); }
+.assignment-history summary { width: fit-content; cursor: pointer; font-weight: 650; color: var(--blue); }
+.assignment-history ol { list-style: none; margin: .5rem 0 0; padding: 0; max-height: 6.5rem; overflow: auto; }
+.assignment-history li { display: flex; flex-wrap: wrap; gap: .45rem .75rem; padding: .2rem 0; }
+.assignment-history time { color: var(--muted); }
 
 .messages {
   padding: 1.125rem;
@@ -283,9 +291,15 @@ select {
 .settings-card h1 + p { margin-top: .6rem; }
 .settings-card .primary, .settings-card .secondary:not(.small) { justify-self: start; }
 .agent-list { list-style: none; padding: 0; margin: .9rem 0 0; }
-.agent-row { border-top: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .65rem 0; }
+.agent-row { border-top: 1px solid var(--line); display: flex; align-items: center; flex-wrap: wrap; gap: .5rem .85rem; padding: .7rem 0; }
 .agent-row strong, .agent-row small { display: block; overflow-wrap: anywhere; }
 .agent-row small { font-size: .875rem; color: var(--muted); }
+.agent-info { flex: 1 1 8rem; }
+.routing-form { margin-top: 1rem; padding: .85rem; border-radius: .65rem; background: var(--pale-blue); }
+.routing-form p { color: var(--muted); font-size: .875rem; margin: .35rem 0 .65rem; }
+.capacity-form { display: flex; align-items: end; gap: .35rem; }
+.capacity-form input { width: 4.4rem; display: block; padding: .4rem .5rem; }
+.capacity-form label { font-size: .875rem; }
 .rules-layout { max-width: 60rem; }
 .rules-layout form { display: grid; gap: 1rem; margin-top: 1rem; }
 .rules-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .7rem; }

@@ -16,6 +16,10 @@ const rulesNote = byId('rules-note');
 const dialog = byId('password-dialog');
 const connectionMessage = 'Koneksi terputus. Menyambungkan kembali…';
 const agentStatus = { pending: 'Belum aktif', temporary: 'Menunggu aktivasi', active: 'Aktif' };
+const agentList = byId('agent-list');
+const autoRouting = byId('routing-enabled');
+const acceptingChats = byId('agent-accepting');
+const presenceLabel = byId('agent-presence-label');
 
 let user = null;
 let view = 'inbox';
@@ -28,12 +32,17 @@ let selectedChat = null;
 let queueKey = '';
 let agentOptionsKey = '';
 let readRequest = null;
+let teamRequest = null;
+let presenceRequest = null;
+let lastPresence = null;
 let working = false;
 let scrollAfterSend = false;
 
 function cancelRead() {
   readRequest?.abort();
   readRequest = null;
+  teamRequest?.abort();
+  teamRequest = null;
 }
 
 function selectChat(id) {
@@ -44,6 +53,7 @@ function selectChat(id) {
   byId('staff-reply').reset();
   byId('staff-messages').replaceChildren();
   delete byId('staff-messages').dataset.chat;
+  byId('assignment-history').open = false;
   renderQueue();
   renderThread();
   void refreshInbox();
@@ -68,7 +78,7 @@ function renderQueue() {
     if (chat.id === selectedId) button.setAttribute('aria-current', 'true');
     const heading = element('span', 'queue-item-top');
     heading.append(element('strong', '', chat.name), timeLabel(chat.updatedAt, true));
-    const label = chat.closedAt ? 'Selesai' : chat.agentName || 'Belum ditugaskan';
+    const label = chat.closedAt ? 'Selesai' : chat.agentName || queueLabel(chat);
     button.append(heading, element('span', 'queue-preview', chat.preview), element('span', 'queue-meta', label));
     return button;
   });
@@ -76,6 +86,32 @@ function renderQueue() {
     filter === 'closed' ? 'Belum ada chat selesai.' : 'Belum ada chat dalam daftar ini.')]));
   queue.scrollTop = scroll;
   if (focused) queue.querySelector(`[data-chat="${focused}"]`)?.focus({ preventScroll: true });
+}
+
+function queueLabel(chat) {
+  return chat.routingState === 'hold' ? 'Ditahan admin' : 'Menunggu agen';
+}
+
+function renderAssignmentEvents(chat) {
+  const history = byId('assignment-history');
+  const events = chat.assignmentEvents ?? [];
+  history.hidden = user.role !== 'admin' || !events.length;
+  const key = `${chat.id}:${chat.assignmentVersion}`;
+  if (history.dataset.version === key) return;
+  history.dataset.version = key;
+  const rows = events.map(event => {
+    const label = {
+      auto: `Ditugaskan otomatis ke ${event.agent}`,
+      manual: `${event.actor} memilih ${event.agent}`,
+      hold: `${event.actor} menahan chat di antrean`,
+      queue: `${event.actor} mengembalikan chat ke antrean otomatis`,
+      offline: `Kembali ke antrean karena ${event.previousAgent} terputus`,
+    }[event.kind];
+    const row = element('li');
+    row.append(timeLabel(event.at, true), element('span', '', label));
+    return row;
+  });
+  byId('assignment-events').replaceChildren(...rows);
 }
 
 function renderThread() {
@@ -87,19 +123,21 @@ function renderThread() {
   }
   const { name, agentName, assigneeId, closedAt } = selectedChat;
   byId('thread-name').textContent = name;
-  byId('thread-status').textContent = closedAt ? 'Selesai' : agentName ? `Ditangani oleh ${agentName}` : 'Belum ditugaskan';
+  byId('thread-status').textContent = closedAt ? 'Selesai' : agentName ? `Ditugaskan ke ${agentName}` : queueLabel(selectedChat);
   byId('thread-tools').hidden = Boolean(closedAt);
   byId('staff-reply').hidden = Boolean(closedAt);
   if (user.role === 'admin') {
-    const options = JSON.stringify(agents.map(({ id, name }) => [id, name]));
+    const options = JSON.stringify(agents.map(({ id, name, status }) => [id, name, status]));
     if (options !== agentOptionsKey) {
-      assignment.replaceChildren(new Option('Belum ditugaskan', ''), ...agents.map(agent => new Option(agent.name, agent.id)));
+      const choices = agents.map(agent => new Option(agent.status === 'active' ? agent.name : `${agent.name} · ${agentStatus[agent.status]}`, agent.id));
+      assignment.replaceChildren(new Option('Antrean otomatis', ''), new Option('Tahan di antrean', 'hold'), ...choices);
       agentOptionsKey = options;
     }
     assignment.disabled = working || !agents.length || Boolean(assigneeId && !agents.some(agent => agent.id === assigneeId));
-    const value = assigneeId ? String(assigneeId) : '';
+    const value = assigneeId ? String(assigneeId) : selectedChat.routingState === 'hold' ? 'hold' : '';
     if (assignment.value !== value) assignment.value = value;
   }
+  renderAssignmentEvents(selectedChat);
   renderMessages(byId('staff-messages'), selectedChat, 'staff', scrollAfterSend);
 }
 
@@ -149,7 +187,10 @@ async function openView(next) {
     void refreshInbox();
   }
   if (user.role !== 'admin') return;
-  if (view === 'agents') byId('agent-form').hidden = true;
+  if (view === 'agents') {
+    byId('agent-form').hidden = true;
+    byId('routing-form').hidden = true;
+  }
   if (view === 'rules') byId('rules-form').hidden = true;
   try {
     if (view === 'rules') {
@@ -161,10 +202,8 @@ async function openView(next) {
       const data = await api('/api/staff/agents');
       if (version !== viewVersion) return;
       agents = data.agents;
-      if (view === 'agents') {
-        renderAgents();
-        byId('agent-form').hidden = false;
-      } else renderThread();
+      if (view === 'agents') applyTeam(data);
+      else renderThread();
     }
   } catch (error) {
     if (version !== viewVersion) return;
@@ -178,12 +217,14 @@ function showSession(staff, setup = 'complete') {
   const signedIn = user && !user.mustChangePassword;
   byId('auth').hidden = Boolean(signedIn);
   byId('office').hidden = !signedIn;
+  byId('agent-presence').hidden = !(signedIn && user.role === 'agent');
   byId('staff-account').hidden = !user;
   byId('account-name').textContent = user?.name ?? '';
   for (const form of authForms) form.hidden = true;
   if (signedIn) {
     for (const action of document.querySelectorAll('[data-admin]')) action.hidden = user.role !== 'admin';
     void openView('inbox');
+    if (user.role === 'agent') void syncPresence();
     return;
   }
 
@@ -209,6 +250,13 @@ function showSession(staff, setup = 'complete') {
 
 function endSession(message = 'Sesi berakhir. Silakan masuk kembali.') {
   cancelRead();
+  presenceRequest?.abort();
+  presenceRequest = null;
+  lastPresence = null;
+  acceptingChats.checked = false;
+  acceptingChats.disabled = true;
+  presenceLabel.textContent = 'Menyambungkan…';
+  delete presenceLabel.dataset.ready;
   ++viewVersion;
   chats = [];
   agents = [];
@@ -222,9 +270,11 @@ function endSession(message = 'Sesi berakhir. Silakan masuk kembali.') {
   assignment.replaceChildren();
   byId('staff-messages').replaceChildren();
   delete byId('staff-messages').dataset.chat;
-  byId('agent-list').replaceChildren();
+  agentList.replaceChildren();
+  byId('assignment-events').replaceChildren();
+  delete byId('assignment-history').dataset.version;
   byId('keywords').replaceChildren();
-  for (const id of ['staff-reply', 'agent-form', 'rules-form']) byId(id).reset();
+  for (const id of ['staff-reply', 'agent-form', 'routing-form', 'rules-form']) byId(id).reset();
   if (dialog.open) dialog.close();
   showSession(null);
   notice(authNote, message, Boolean(message));
@@ -316,11 +366,10 @@ staffReply.addEventListener('submit', event => {
 
 assignment.addEventListener('change', () => {
   if (!selectedChat) return;
-  const agentId = assignment.value ? Number(assignment.value) : null;
+  const hold = assignment.value === 'hold';
+  const agentId = assignment.value && !hold ? Number(assignment.value) : null;
   void operate(assignment, async () => {
-    await api(`/api/staff/chats/${selectedId}/assign`, { agentId });
-    selectedChat.assigneeId = agentId;
-    selectedChat.agentName = agents.find(agent => agent.id === agentId)?.name ?? null;
+    await api(`/api/staff/chats/${selectedId}/assign`, { agentId, hold, expectedVersion: selectedChat.assignmentVersion });
     if (filter === 'unassigned' && agentId) filter = 'active';
   });
 });
@@ -333,20 +382,144 @@ byId('close-chat').addEventListener('click', event => {
   });
 });
 
-function renderAgents() {
-  const rows = agents.map(agent => {
-    const row = element('li', 'agent-row');
-    const info = element('div');
-    info.append(element('strong', '', agent.name), element('small', '', `${agent.username} · ${agentStatus[agent.status]}`));
-    const button = element('button', 'secondary small', agent.status === 'pending' ? 'Buat sandi sementara' : 'Atur ulang sandi');
-    button.type = 'button';
-    button.dataset.agent = agent.id;
-    button.setAttribute('aria-label', `${button.textContent} untuk ${agent.name}`);
-    row.append(info, button);
-    return row;
-  });
-  byId('agent-list').replaceChildren(...rows);
+function readiness(agent) {
+  if (agent.status !== 'active') return agentStatus[agent.status];
+  if (!agent.online) return 'Offline';
+  if (!agent.accepting) return 'Jeda';
+  return agent.activeChats < agent.capacity ? 'Siap' : 'Penuh';
 }
+
+function newAgentRow(agent) {
+  const row = element('li', 'agent-row');
+  row.dataset.row = agent.id;
+  const info = element('div', 'agent-info');
+  info.append(element('strong', '', agent.name), element('small'));
+  const form = element('form', 'capacity-form');
+  form.method = 'post';
+  form.dataset.capacity = agent.id;
+  const label = element('label', '', 'Kapasitas');
+  const input = element('input');
+  input.type = 'number';
+  input.min = 1;
+  input.max = 20;
+  input.required = true;
+  input.setAttribute('aria-label', `Kapasitas chat ${agent.name}`);
+  label.append(input);
+  const save = element('button', 'secondary small', 'Simpan');
+  save.type = 'submit';
+  save.setAttribute('aria-label', `Simpan kapasitas ${agent.name}`);
+  form.append(label, save);
+  const reset = element('button', 'secondary small');
+  reset.type = 'button';
+  reset.dataset.agent = agent.id;
+  row.append(info, form, reset);
+  agentList.append(row);
+  return row;
+}
+
+function renderAgents() {
+  const rows = new Map([...agentList.children].map(row => [Number(row.dataset.row), row]));
+  for (const agent of agents) {
+    const row = rows.get(agent.id) ?? newAgentRow(agent);
+    rows.delete(agent.id);
+    const summary = row.querySelector('small');
+    const label = `${agent.username} · ${readiness(agent)} · ${agent.activeChats}/${agent.capacity} chat`;
+    if (summary.textContent !== label) summary.textContent = label;
+    const input = row.querySelector('input');
+    const capacity = String(agent.capacity);
+    if (input.defaultValue !== capacity) {
+      if (input.value === input.defaultValue) input.value = capacity;
+      input.defaultValue = capacity;
+    }
+    const reset = row.querySelector('[data-agent]');
+    const action = agent.status === 'pending' ? 'Buat sandi sementara' : 'Atur ulang sandi';
+    if (reset.textContent !== action) {
+      reset.textContent = action;
+      reset.setAttribute('aria-label', `${action} untuk ${agent.name}`);
+    }
+  }
+  for (const row of rows.values()) row.remove();
+}
+
+function applyTeam(data) {
+  agents = data.agents;
+  if (autoRouting.checked === autoRouting.defaultChecked) autoRouting.checked = data.autoAssign;
+  autoRouting.defaultChecked = data.autoAssign;
+  renderAgents();
+  byId('agent-form').hidden = false;
+  byId('routing-form').hidden = false;
+}
+
+async function refreshTeam() {
+  if (view !== 'agents' || user?.role !== 'admin' || working || teamRequest || document.hidden) return;
+  const controller = new AbortController();
+  teamRequest = controller;
+  try {
+    const data = await api('/api/staff/agents', undefined, controller.signal);
+    if (teamRequest === controller) {
+      applyTeam(data);
+      if (officeNote.textContent === connectionMessage) notice(officeNote);
+    }
+  } catch (error) {
+    if (teamRequest !== controller) return;
+    if (error.status === 401) endSession();
+    else notice(officeNote, connectionMessage, true);
+  } finally {
+    if (teamRequest === controller) teamRequest = null;
+  }
+}
+
+async function syncPresence(accepting) {
+  if (user?.role !== 'agent' || user.mustChangePassword || presenceRequest) return;
+  const controller = new AbortController();
+  presenceRequest = controller;
+  acceptingChats.disabled = true;
+  try {
+    const body = accepting === undefined ? {} : { accepting };
+    const { presence } = await api('/api/staff/presence', body, controller.signal);
+    if (presenceRequest !== controller) return;
+    lastPresence = presence;
+    acceptingChats.checked = presence.accepting;
+    const status = readiness(presence);
+    const label = `${status} · ${presence.activeChats}/${presence.capacity} chat`;
+    if (presenceLabel.textContent !== label) presenceLabel.textContent = label;
+    presenceLabel.dataset.ready = String(status === 'Siap');
+  } catch (error) {
+    if (presenceRequest !== controller) return;
+    if (error.status === 401) endSession();
+    else {
+      acceptingChats.checked = Boolean(lastPresence?.accepting);
+      presenceLabel.textContent = connectionMessage;
+      delete presenceLabel.dataset.ready;
+    }
+  } finally {
+    if (presenceRequest === controller) {
+      presenceRequest = null;
+      acceptingChats.disabled = false;
+    }
+  }
+}
+
+acceptingChats.addEventListener('change', () => void syncPresence(acceptingChats.checked));
+
+byId('routing-form').addEventListener('submit', event => {
+  event.preventDefault();
+  void operate(event.currentTarget.querySelector('[type="submit"]'), async () => {
+    applyTeam(await api('/api/staff/routing', { enabled: autoRouting.checked }));
+    notice(officeNote, 'Pengaturan penugasan tersimpan.');
+  });
+});
+
+agentList.addEventListener('submit', event => {
+  const form = event.target.closest('[data-capacity]');
+  if (!form) return;
+  event.preventDefault();
+  const capacity = form.querySelector('input').valueAsNumber;
+  void operate(form.querySelector('[type="submit"]'), async () => {
+    applyTeam(await api(`/api/staff/agents/${form.dataset.capacity}/capacity`, { capacity }));
+    notice(officeNote, 'Kapasitas agen tersimpan.');
+  });
+});
 
 const agentForm = byId('agent-form');
 agentForm.addEventListener('submit', event => {
@@ -360,7 +533,7 @@ agentForm.addEventListener('submit', event => {
   });
 });
 
-byId('agent-list').addEventListener('click', event => {
+agentList.addEventListener('click', event => {
   const button = event.target.closest('[data-agent]');
   if (!button || working) return;
   const agent = agents.find(item => item.id === Number(button.dataset.agent));
@@ -447,5 +620,12 @@ byId('rules-form').addEventListener('submit', event => {
 });
 
 document.addEventListener('visibilitychange', refreshInbox);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  void refreshTeam();
+  void syncPresence();
+});
 setInterval(refreshInbox, 2_000);
+setInterval(refreshTeam, 5_000);
+setInterval(syncPresence, 20_000);
 void loadSession();

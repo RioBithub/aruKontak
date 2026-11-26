@@ -1,0 +1,18 @@
+server {
+    listen %ip%:@HTTPS_PORT@ ssl;
+    server_name %domain_idn% %alias_idn%;
+    root %sdocroot%;
+    access_log /var/log/nginx/domains/%domain%.log combined;
+    error_log /var/log/nginx/domains/%domain%.error.log error;
+    client_max_body_size 96k;
+    ssl_certificate %ssl_pem%;
+    ssl_certificate_key %ssl_key%;
+    ssl_early_data off;
+
+    include %home%/%user%/conf/web/%domain%/nginx.hsts.conf*;
+    include %home%/%user%/conf/web/%domain%/nginx.ssl.conf_*;
+
+    location / {
+        include /usr/local/hestia/data/templates/web/nginx/jrcare-upstream.inc;
+    }
+}

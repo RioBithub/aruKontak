@@ -1,0 +1,10 @@
+proxy_pass http://127.0.0.1:7310;
+proxy_http_version 1.1;
+proxy_set_header Connection "";
+proxy_set_header Host $host;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_connect_timeout 5s;
+proxy_read_timeout 35s;
+proxy_buffering off;
+proxy_cache off;

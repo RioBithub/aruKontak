@@ -1,0 +1,51 @@
+# Deploy JRCare dengan HestiaCP
+
+Domain pelanggan adalah `https://helpdesk-jrcare.aruraharja.co.id/`. Admin dan agen membuka `/petugas` pada domain tersebut.
+
+## Pasang layanan di VPS
+
+Gunakan VPS Debian atau Ubuntu yang sudah menjalankan HestiaCP dengan Nginx, baik proxy Nginx di depan Apache maupun Nginx mandiri. Pastikan domain mengarah ke VPS dan Node.js 24 atau lebih baru tersedia dari `PATH` system-wide. Installer memakai `git`, `curl`, dan `systemd`.
+
+```sh
+git clone https://github.com/RioBithub/aruKontak.git
+cd aruKontak
+sudo bash deploy/hestia/install.sh
+```
+
+Installer menjalankan satu layanan `jrcare` melalui systemd pada `127.0.0.1:7310`, menyediakan template `jrcare-node` untuk Hestia, dan menyimpan database di `/var/lib/jrcare/jrcare.sqlite`. Konfigurasi dan token penyiapan awal dibuat di `/etc/jrcare/jrcare.env`. Menjalankan installer kembali memakai database dan konfigurasi yang sudah ada.
+
+## Kaitkan domain dan HTTPS
+
+1. Di **Web** HestiaCP, buka `helpdesk-jrcare.aruraharja.co.id` atau tambahkan sebagai **Web Domain** jika belum ada.
+2. Di **Advanced Options**, pilih `jrcare-node` pada **Proxy Template** untuk Nginx + Apache atau **Web Template Nginx** untuk Nginx mandiri. Simpan perubahan.
+3. Pertahankan sertifikat HTTPS yang sudah valid. Untuk domain tanpa sertifikat, aktifkan **SSL** dan **Use Let’s Encrypt**. Aktifkan pengalihan ke HTTPS setelah sertifikat tersedia.
+4. Jalankan pemeriksaan ini dari VPS atau dari komputer Anda.
+
+   ```sh
+   curl -fsS https://helpdesk-jrcare.aruraharja.co.id/healthz
+   ```
+
+   Respons yang diharapkan adalah `{"status":"ok","service":"jrcare"}`. Periksa `sudo nginx -t` dan `sudo journalctl -u jrcare -n 80` jika domain masih menampilkan halaman bawaan atau gateway error.
+
+Referensi HestiaCP untuk [template dan rebuild domain](https://hestiacp.com/docs/server-administration/web-templates) dan [sertifikat web domain](https://hestiacp.com/docs/user-guide/web-domains).
+
+## Siapkan akun dan coba chat
+
+1. Ambil token penyiapan dari terminal VPS dengan `sudo sed -n 's/^JRCARE_SETUP_TOKEN=//p' /etc/jrcare/jrcare.env`. Buka `https://helpdesk-jrcare.aruraharja.co.id/petugas` dan tentukan sandi untuk akun `admin`.
+2. Di **Akun agen**, buat sandi sementara untuk Igun, Meri, dan Lingga. Setiap agen masuk dan menentukan sandi tetapnya. Menukar akun di satu browser akan mengganti sesi, jadi gunakan profil browser berbeda saat menguji beberapa peran.
+3. Kirim pesan contoh dari halaman pelanggan. Cek bahwa agen yang siap mendapat chat, agen bisa membalas, dan balasan muncul di halaman pelanggan.
+4. Sesuaikan sapaan, jam layanan WIB, dan kata kunci di **Balasan otomatis**.
+
+## Perbarui dan cadangkan
+
+Gunakan `git pull --ff-only` dari checkout, kemudian jalankan ulang installer. Installer memeriksa layanan dari loopback setelah berpindah rilis dan mengembalikan rilis sebelumnya jika pemeriksaan gagal. Data SQLite berada di luar direktori rilis. Jika template Nginx berubah di versi berikutnya, simpan ulang pengaturan domain di Hestia untuk membangun ulang konfigurasinya.
+
+Untuk cadangan konsisten saat layanan aktif, jalankan perintah berikut jika CLI `sqlite3` sudah terpasang di VPS.
+
+```sh
+sudo sh -c 'umask 077
+backup="/root/jrcare-$(date -u +%Y%m%dT%H%M%SZ).sqlite"
+sqlite3 /var/lib/jrcare/jrcare.sqlite ".backup $backup"'
+```
+
+Cadangan mencakup percakapan, pengaturan, dan akun. Simpan cadangan dengan akses terbatas.

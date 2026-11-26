@@ -167,6 +167,7 @@ function idOf(value) {
 function checkChatResult(result) {
   if (result === 'missing') throw new HttpError(404, 'Chat tidak tersedia.');
   if (result === 'closed') throw new HttpError(409, 'Chat ini sudah selesai.');
+  if (result === 'changed') throw new HttpError(409, 'Penugasan baru saja berubah. Periksa agen saat ini dan coba lagi.');
   if (result === 'agent') throw new HttpError(400, 'Pilih salah satu agen yang terdaftar.');
 }
 
@@ -212,7 +213,7 @@ function readApi(request, response, url) {
     }
     case '/api/staff/agents':
       requireStaff(request, { admin: true });
-      return { agents: store.listAgents(db) };
+      return store.listAgents(db);
     case '/api/staff/rules':
       requireStaff(request, { admin: true });
       return { rules: store.getRules(db) };
@@ -282,6 +283,20 @@ async function writeApi(request, response, path, body) {
       if (!agent) throw new HttpError(409, 'Nama pengguna sudah dipakai.');
       return { agent };
     }
+    case '/api/staff/presence': {
+      const user = requireStaff(request);
+      if (user.role !== 'agent') throw new HttpError(403, 'Status ketersediaan hanya untuk agen.');
+      if (body.accepting !== undefined && typeof body.accepting !== 'boolean') {
+        throw new HttpError(400, 'Status ketersediaan tidak valid.');
+      }
+      const presence = store.updatePresence(db, user.id, readCookie(request, staffCookie), body.accepting);
+      if (!presence) throw new HttpError(401, 'Masuk kembali untuk melanjutkan.');
+      return { presence };
+    }
+    case '/api/staff/routing':
+      requireStaff(request, { admin: true });
+      if (typeof body.enabled !== 'boolean') throw new HttpError(400, 'Pengaturan penugasan tidak valid.');
+      return store.updateRouting(db, body.enabled);
     case '/api/staff/rules': {
       requireStaff(request, { admin: true });
       let rules;
@@ -301,13 +316,32 @@ async function writeApi(request, response, path, body) {
     return { agent, temporaryPassword };
   }
 
+  const capacity = path.match(/^\/api\/staff\/agents\/(\d+)\/capacity$/);
+  if (capacity) {
+    requireStaff(request, { admin: true });
+    if (!Number.isInteger(body.capacity) || body.capacity < 1 || body.capacity > 20) {
+      throw new HttpError(400, 'Kapasitas agen harus 1–20 chat aktif.');
+    }
+    const data = store.updateCapacity(db, idOf(capacity[1]), body.capacity);
+    if (!data) throw new HttpError(404, 'Akun agen tidak ditemukan.');
+    return data;
+  }
+
   const thread = path.match(/^\/api\/staff\/chats\/(\d+)\/(message|assign|close)$/);
   if (thread) {
     const [, rawId, action] = thread;
     const id = idOf(rawId);
     const user = requireStaff(request, { admin: action === 'assign' });
     if (action === 'message') checkChatResult(store.postStaffMessage(db, user, id, messageOf(body.text), requestKeyOf(body.requestKey)));
-    if (action === 'assign') checkChatResult(store.assignChat(db, user, id, body.agentId === null ? null : idOf(body.agentId)));
+    if (action === 'assign') {
+      const agentId = body.agentId === null ? null : idOf(body.agentId);
+      const { hold, expectedVersion } = body;
+      if ((hold !== undefined && (typeof hold !== 'boolean' || (hold && agentId)))
+          || (expectedVersion !== undefined && (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0))) {
+        throw new HttpError(400, 'Pilihan penugasan tidak valid.');
+      }
+      checkChatResult(store.assignChat(db, user, id, { agentId, hold, expectedVersion }));
+    }
     if (action === 'close') checkChatResult(store.closeChat(db, user, id));
     return {};
   }
@@ -328,6 +362,10 @@ const server = createServer({ headersTimeout: 10_000, requestTimeout: 30_000 }, 
 
   try {
     const url = new URL(request.url, 'http://localhost');
+    if (url.pathname === '/healthz' && (request.method === 'GET' || request.method === 'HEAD')) {
+      db.prepare('SELECT 1').get();
+      return sendJson(response, 200, { status: 'ok', service: 'jrcare' });
+    }
     const file = staticFiles.get(url.pathname);
     if (file && (request.method === 'GET' || request.method === 'HEAD')) {
       response.writeHead(200, { 'Content-Type': `${file.type}; charset=utf-8`, 'Cache-Control': 'no-cache' });
@@ -348,3 +386,14 @@ const server = createServer({ headersTimeout: 10_000, requestTimeout: 30_000 }, 
 });
 
 server.listen(port, host, () => console.log(`JRCare siap di http://${host}:${server.address().port}`));
+
+const routingTimer = setInterval(() => {
+  try { store.runRouting(db); } catch (error) { console.error('Penugasan JRCare gagal', error); }
+}, 15_000).unref();
+
+function shutdown() {
+  clearInterval(routingTimer);
+  server.close(() => db.close());
+}
+process.once('SIGTERM', shutdown);
+process.once('SIGINT', shutdown);
