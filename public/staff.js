@@ -59,6 +59,10 @@ function selectChat(id) {
   void refreshInbox();
 }
 
+function initials(name) {
+  return name.trim().split(/\s+/u).slice(0, 2).map(word => Array.from(word)[0]).join('').toLocaleUpperCase('id-ID');
+}
+
 function renderQueue() {
   const visible = chats.filter(statusFilters[filter]);
   for (const button of filterButtons) {
@@ -79,7 +83,13 @@ function renderQueue() {
     const heading = element('span', 'queue-item-top');
     heading.append(element('strong', '', chat.name), timeLabel(chat.updatedAt, true));
     const label = chat.closedAt ? 'Selesai' : chat.agentName || queueLabel(chat);
-    button.append(heading, element('span', 'queue-preview', chat.preview), element('span', 'queue-meta', label));
+    const avatar = element('span', 'chat-avatar', initials(chat.name));
+    avatar.setAttribute('aria-hidden', 'true');
+    const badge = element('span', 'queue-meta', label);
+    badge.dataset.chatStatus = chat.closedAt ? 'closed' : chat.agentName ? 'assigned' : chat.routingState === 'hold' ? 'hold' : 'waiting';
+    const content = element('span', 'queue-content');
+    content.append(heading, element('span', 'queue-preview', chat.preview), badge);
+    button.append(avatar, content);
     return button;
   });
   queue.replaceChildren(...(rows.length ? rows : [element('p', 'queue-empty',
@@ -115,6 +125,7 @@ function renderAssignmentEvents(chat) {
 }
 
 function renderThread() {
+  byId('inbox').dataset.threadOpen = String(Boolean(selectedId));
   byId('thread-empty').hidden = Boolean(selectedChat);
   byId('thread-view').hidden = !selectedChat;
   if (!selectedChat) {
@@ -122,6 +133,7 @@ function renderThread() {
     return;
   }
   const { name, agentName, assigneeId, closedAt } = selectedChat;
+  byId('thread-avatar').textContent = initials(name);
   byId('thread-name').textContent = name;
   byId('thread-status').textContent = closedAt ? 'Selesai' : agentName ? `Ditugaskan ke ${agentName}` : queueLabel(selectedChat);
   byId('thread-tools').hidden = Boolean(closedAt);
@@ -346,7 +358,16 @@ for (const button of filterButtons) button.addEventListener('click', () => {
 });
 queue.addEventListener('click', event => {
   const button = event.target.closest('[data-chat]');
-  if (button && !working) selectChat(Number(button.dataset.chat));
+  if (!button || working) return;
+  selectChat(Number(button.dataset.chat));
+  const back = byId('thread-back');
+  if (back.getClientRects().length) back.focus();
+});
+
+byId('thread-back').addEventListener('click', () => {
+  if (working) return;
+  selectChat(null);
+  byId('queue-title').focus();
 });
 
 const staffReply = byId('staff-reply');

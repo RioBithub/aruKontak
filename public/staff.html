@@ -4,19 +4,21 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex">
+    <meta name="theme-color" content="#f3f8fc">
     <title>Portal Petugas • JRCare</title>
+    <link rel="icon" href="/assets/jrcare-logo.png" type="image/png">
     <link rel="stylesheet" href="/style.css">
     <script type="module" src="/staff.js"></script>
   </head>
-  <body>
+  <body class="staff-page">
     <header class="site-header">
       <div class="site-bar">
         <a class="brand" href="/petugas" aria-label="JRCare, portal petugas">
-          <span class="brand-mark" aria-hidden="true">JR</span>
+          <img class="brand-mark" src="/assets/jrcare-logo.png" alt="" width="365" height="305">
           <span><strong>JRCare</strong><small>Portal petugas</small></span>
         </a>
         <div class="header-actions">
-          <a class="header-link" href="/">Live chat pelanggan</a>
+          <a class="header-link" href="/" aria-label="Live chat pelanggan">Live chat</a>
           <div id="staff-account" class="staff-account" hidden>
             <span id="account-name"></span>
             <button id="logout" type="button" class="secondary small">Keluar</button>
@@ -26,6 +28,9 @@
     </header>
 
     <main id="auth" class="auth-layout">
+      <div class="auth-art" aria-hidden="true">
+        <span class="hero-emblem"><img src="/assets/jrcare-logo.png" alt="" width="365" height="305"></span>
+      </div>
       <section class="panel auth-card" aria-labelledby="auth-title">
         <h1 id="auth-title">Portal petugas</h1>
         <p id="auth-intro">Memeriksa sesi…</p>
@@ -60,7 +65,7 @@
           <button type="button" data-view="rules" aria-controls="rules" data-admin>Balasan otomatis</button>
         </nav>
         <div id="agent-presence" class="agent-presence" hidden>
-          <label class="check"><input id="agent-accepting" type="checkbox" disabled> Terima chat otomatis</label>
+          <label class="check toggle"><input id="agent-accepting" type="checkbox" disabled> Terima chat otomatis</label>
           <span id="agent-presence-label" class="presence-status" role="status">Menyambungkan…</span>
         </div>
         <button id="copy-link" class="secondary small" type="button">Salin tautan pelanggan</button>
@@ -70,7 +75,7 @@
       <div id="inbox" class="desk-grid">
         <aside class="panel queue" aria-labelledby="queue-title">
           <div class="queue-head">
-            <h1 id="queue-title">Kotak masuk</h1>
+            <h1 id="queue-title" tabindex="-1">Kotak masuk</h1>
             <div class="queue-filters" role="group" aria-label="Filter percakapan">
               <button type="button" data-filter="active" aria-pressed="true">Aktif <span id="count-active">0</span></button>
               <button type="button" data-filter="unassigned" aria-pressed="false" data-admin>Antrean <span id="count-unassigned">0</span></button>
@@ -81,15 +86,19 @@
         </aside>
 
         <section class="panel desk-thread" aria-label="Isi percakapan">
+          <button id="thread-back" class="thread-back" type="button">Kembali ke kotak masuk</button>
           <div id="thread-empty" class="thread-empty">
             <span class="chat-symbol" aria-hidden="true"></span>
             <p>Pilih chat dari kotak masuk.</p>
           </div>
           <div id="thread-view" class="thread-view" hidden>
             <header class="thread-header">
-              <div>
-                <h2 id="thread-name"></h2>
-                <p id="thread-status"></p>
+              <div class="thread-context">
+                <span id="thread-avatar" class="chat-avatar" aria-hidden="true"></span>
+                <div>
+                  <h2 id="thread-name"></h2>
+                  <p id="thread-status"></p>
+                </div>
               </div>
               <div id="thread-tools" class="thread-tools">
                 <label class="sr-only" for="assign-select">Tugaskan agen</label>
@@ -116,7 +125,7 @@
           <h1 id="agents-title">Akun agen</h1>
           <p>Buat sandi sementara untuk mengaktifkan akun. Agen akan memilih sandi baru saat pertama kali masuk.</p>
           <form id="routing-form" class="routing-form" method="post" hidden>
-            <label class="check"><input id="routing-enabled" type="checkbox"> Penugasan otomatis</label>
+            <label class="check toggle"><input id="routing-enabled" type="checkbox"> Penugasan otomatis</label>
             <p>Chat tertua diprioritaskan. Agen yang siap menerima chat sesuai kapasitas dan beban aktifnya.</p>
             <button class="secondary small" type="submit">Simpan penugasan</button>
           </form>

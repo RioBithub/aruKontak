@@ -4,6 +4,8 @@ const startForm = byId('start-form');
 const replyForm = byId('visitor-reply');
 const status = byId('visitor-status');
 const feedback = byId('visitor-error');
+const panel = byId('customer-chat');
+const topicButtons = [...document.querySelectorAll('[data-topic]')];
 let chat = null;
 let readRequest = null;
 let ready = false;
@@ -14,6 +16,7 @@ let submitting = false;
 function render(forceScroll = false) {
   const showingForm = ready && (!chat || (newChat && chat.closedAt));
   const showingThread = chat && !showingForm;
+  byId('visitor-loading').hidden = ready;
   startForm.hidden = !showingForm;
   byId('visitor-thread').hidden = !showingThread;
   if (showingThread) {
@@ -21,12 +24,26 @@ function render(forceScroll = false) {
     byId('visitor-closed').hidden = !chat.closedAt;
     renderMessages(byId('visitor-messages'), chat, 'visitor', forceScroll);
   }
+  let state = 'loading';
   let label = 'Menyambungkan…';
-  if (!connected) label = 'Koneksi terputus. Menyambungkan kembali…';
-  else if (showingForm) label = 'Mulai percakapan';
-  else if (chat?.closedAt) label = 'Selesai';
-  else if (chat?.agentName) label = `Ditangani oleh ${chat.agentName}`;
-  else if (chat) label = 'Menunggu petugas';
+  if (!connected) {
+    state = 'disconnected';
+    label = 'Koneksi terputus. Menyambungkan kembali…';
+  } else if (showingForm) {
+    state = 'ready';
+    label = 'Mulai percakapan';
+  } else if (chat?.closedAt) {
+    state = 'closed';
+    label = 'Selesai';
+  } else if (chat?.agentName) {
+    state = 'active';
+    label = `Ditangani oleh ${chat.agentName}`;
+  } else if (chat) {
+    state = 'waiting';
+    label = 'Menunggu petugas';
+  }
+  panel.dataset.state = state;
+  for (const button of topicButtons) button.disabled = !ready || submitting;
   if (status.textContent !== label) status.textContent = label;
 }
 
@@ -60,9 +77,13 @@ async function send(event, path, payload) {
   const form = event.currentTarget;
   const button = form.querySelector('[type="submit"]');
   const fields = [...form.querySelectorAll('input, textarea')];
+  const buttonLabel = button.textContent;
   button.disabled = true;
+  button.textContent = 'Mengirim…';
+  form.setAttribute('aria-busy', 'true');
   for (const field of fields) field.readOnly = true;
   notice(feedback);
+  render();
   try {
     const result = await postMessage(path, form, payload);
     chat = result.chat;
@@ -76,7 +97,10 @@ async function send(event, path, payload) {
   } finally {
     submitting = false;
     button.disabled = false;
+    button.textContent = buttonLabel;
+    form.removeAttribute('aria-busy');
     for (const field of fields) field.readOnly = false;
+    render();
     void refresh();
   }
 }
@@ -89,13 +113,30 @@ replyForm.addEventListener('submit', event => void send(event, '/api/visitor/mes
   chatId: chat?.id,
   text: byId('visitor-message').value,
 }));
-byId('new-chat').addEventListener('click', () => {
+function prepareNewChat() {
   newChat = true;
   byId('visitor-name').value = chat.name;
   notice(feedback);
   render();
+}
+
+byId('new-chat').addEventListener('click', () => {
+  prepareNewChat();
   byId('visitor-first').focus();
 });
+
+for (const button of topicButtons) {
+  button.addEventListener('click', () => {
+    if (!ready || submitting) return;
+    if (chat?.closedAt && !newChat) prepareNewChat();
+    const draft = byId(chat && !newChat ? 'visitor-message' : 'visitor-first');
+    if (!draft.value.trim() || draft.value === draft.dataset.topicDraft) {
+      draft.value = button.dataset.topic;
+      draft.dataset.topicDraft = draft.value;
+    }
+    draft.focus();
+  });
+}
 
 document.addEventListener('visibilitychange', refresh);
 setInterval(refresh, 2_000);

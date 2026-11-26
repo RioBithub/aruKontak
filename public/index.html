@@ -4,7 +4,9 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="description" content="Hubungi petugas Jasa Raharja Care melalui live chat.">
-    <title>Live Chat • JRCare</title>
+    <meta name="theme-color" content="#f3f8fc">
+    <title>Helpdesk JRCare</title>
+    <link rel="icon" href="/assets/jrcare-logo.png" type="image/png">
     <link rel="stylesheet" href="/style.css">
     <script type="module" src="/visitor.js"></script>
   </head>
@@ -12,28 +14,45 @@
     <header class="site-header">
       <div class="site-bar">
         <a class="brand" href="/" aria-label="JRCare, live chat">
-          <span class="brand-mark" aria-hidden="true">JR</span>
-          <span><strong>JRCare</strong><small>Jasa Raharja Care</small></span>
+          <img class="brand-mark" src="/assets/jrcare-logo.png" alt="" width="365" height="305">
+          <span><strong>JRCare</strong><small>Helpdesk</small></span>
         </a>
         <a class="header-link" href="/petugas">Portal petugas</a>
       </div>
     </header>
 
     <main class="visitor-layout">
-      <div class="visitor-intro">
-        <h1>Ada yang bisa<br class="desktop-break"> kami bantu?</h1>
-        <p>Tulis pertanyaan Anda untuk terhubung dengan petugas Jasa Raharja Care.</p>
-      </div>
+      <section class="visitor-intro" aria-labelledby="visitor-title">
+        <div class="intro-top">
+          <span class="intro-label">Jasa Raharja Care</span>
+          <span class="hero-emblem" aria-hidden="true"><img src="/assets/jrcare-logo.png" alt="" width="365" height="305"></span>
+        </div>
+        <div class="intro-copy">
+          <h1 id="visitor-title">Ada yang bisa <span>kami bantu?</span></h1>
+          <p>Tanya petugas kami soal santunan dan layanan Jasa Raharja.</p>
+        </div>
+        <div class="quick-topics" role="group" aria-labelledby="topics-title">
+          <p id="topics-title">Pilih topik untuk mulai</p>
+          <div class="topic-list">
+            <button type="button" class="topic" data-topic="Halo, saya ingin bertanya tentang pengajuan santunan." disabled>Pengajuan santunan</button>
+            <button type="button" class="topic" data-topic="Halo, saya ingin menanyakan status pengajuan saya." disabled>Status pengajuan</button>
+            <button type="button" class="topic" data-topic="Halo, saya membutuhkan informasi tentang layanan Jasa Raharja." disabled>Informasi layanan</button>
+          </div>
+        </div>
+      </section>
 
-      <section class="panel chat-card" aria-labelledby="chat-title">
+      <section class="panel chat-card" id="customer-chat" aria-labelledby="chat-title" data-state="loading">
         <header class="chat-card-header">
           <span class="chat-symbol" aria-hidden="true"></span>
           <div>
-            <h2 id="chat-title">Live chat</h2>
+            <h2 id="chat-title">Live chat JRCare</h2>
             <p id="visitor-status" role="status">Menyambungkan…</p>
           </div>
         </header>
 
+        <div id="visitor-loading" class="chat-loading" aria-hidden="true">
+          <span></span><span></span><span></span><span></span>
+        </div>
         <form id="start-form" class="start-form" method="post" hidden>
           <label for="visitor-name">Nama Anda</label>
           <input id="visitor-name" name="name" autocomplete="name" maxlength="80" placeholder="Masukkan nama" required>

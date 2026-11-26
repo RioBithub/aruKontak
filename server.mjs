@@ -40,8 +40,11 @@ const staticFiles = new Map([
   ['/common.js', ['common.js', 'text/javascript']],
   ['/visitor.js', ['visitor.js', 'text/javascript']],
   ['/staff.js', ['staff.js', 'text/javascript']],
+  ['/assets/jrcare-logo.png', ['assets/jrcare-logo.png', 'image/png']],
+  ['/assets/plus-jakarta-sans.woff2', ['assets/plus-jakarta-sans.woff2', 'font/woff2']],
 ].map(([path, [file, type]]) => [path, {
-  bytes: readFileSync(new URL(`./public/${file}`, import.meta.url)), type,
+  bytes: readFileSync(new URL(`./public/${file}`, import.meta.url)),
+  type: type.startsWith('text/') ? `${type}; charset=utf-8` : type,
 }]));
 
 class HttpError extends Error {
@@ -368,7 +371,7 @@ const server = createServer({ headersTimeout: 10_000, requestTimeout: 30_000 }, 
     }
     const file = staticFiles.get(url.pathname);
     if (file && (request.method === 'GET' || request.method === 'HEAD')) {
-      response.writeHead(200, { 'Content-Type': `${file.type}; charset=utf-8`, 'Cache-Control': 'no-cache' });
+      response.writeHead(200, { 'Content-Type': file.type, 'Cache-Control': 'no-cache' });
       response.end(request.method === 'HEAD' ? undefined : file.bytes);
       return;
     }
