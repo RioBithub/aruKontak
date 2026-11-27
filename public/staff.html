@@ -100,7 +100,10 @@
                 <span id="thread-avatar" class="chat-avatar" aria-hidden="true"></span>
                 <div>
                   <h2 id="thread-name"></h2>
-                  <p id="thread-status"></p>
+                  <div class="thread-status-line">
+                    <p id="thread-status"></p>
+                    <span id="thread-agent-presence" class="status-pill" hidden></span>
+                  </div>
                   <p id="thread-contact" class="thread-contact" hidden>
                     <a id="thread-phone" hidden></a>
                     <a id="thread-email" hidden></a>
@@ -124,7 +127,15 @@
             <ol id="staff-messages" class="messages" role="log" aria-label="Percakapan pelanggan" aria-relevant="additions"></ol>
             <form id="staff-reply" class="composer" method="post">
               <label class="sr-only" for="staff-message">Balasan petugas</label>
-              <textarea id="staff-message" name="message" rows="2" maxlength="2000" placeholder="Tulis balasan untuk pelanggan" required></textarea>
+              <div class="composer-fields">
+                <textarea id="staff-message" name="message" rows="2" maxlength="2000" placeholder="Tulis balasan untuk pelanggan" required></textarea>
+                <div class="upload-control" data-upload>
+                  <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" data-file-input hidden>
+                  <button class="attach-button secondary small" type="button" data-choose-file>Lampirkan file</button>
+                  <p class="upload-note" data-file-note role="status" hidden></p>
+                  <div class="upload-preview" data-file-preview hidden></div>
+                </div>
+              </div>
               <button class="primary" type="submit">Kirim</button>
             </form>
           </div>
@@ -134,7 +145,7 @@
       <section id="agents" class="settings-layout" aria-labelledby="agents-title" hidden>
         <div class="panel settings-card">
           <h1 id="agents-title">Akun agen</h1>
-          <p>Buat sandi sementara untuk mengaktifkan akun. Agen akan memilih sandi baru saat pertama kali masuk.</p>
+          <p id="team-presence" class="team-presence" role="status">Memuat status agen…</p>
           <form id="routing-form" class="routing-form" method="post" hidden>
             <label class="check toggle"><input id="routing-enabled" type="checkbox"> Penugasan otomatis</label>
             <p>Chat tertua diprioritaskan. Agen yang siap menerima chat sesuai kapasitas dan beban aktifnya.</p>

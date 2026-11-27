@@ -25,6 +25,7 @@ test('backfills stable links for existing chats and keeps codes out of the inbox
     welcome: defaultRules.welcome, away: defaultRules.away, keywords: [],
   }));
   db.exec(`
+    DROP TABLE message_attachments;
     DROP TABLE visitor_departures;
     DROP TABLE workflow_settings;
     DROP INDEX chats_by_access_code;
@@ -53,6 +54,31 @@ test('backfills stable links for existing chats and keeps codes out of the inbox
 
   db = store.openStore(filename);
   assert.deepEqual(store.visitorChat(db, { code: restored.code }), restored);
+});
+
+test('restarts the selected topic in the same chat until a petugas starts handling it', t => {
+  const db = store.openStore(':memory:');
+  t.after(() => db.close());
+  const admin = store.setupAdmin(db, 'hash', session('admin'));
+  const chat = store.startChat(db, 'owner', 'Pengunjung', 'Halo', 'start');
+  const access = { code: chat.code };
+  store.postVisitorMessage(db, access, chat.id, '1', 'choice');
+  const before = store.visitorChat(db, access);
+  assert.equal(before.botPending, false);
+  assert.equal(before.canRestart, true);
+  assert.equal(store.restartVisitorTopic(db, access, chat.id, 'restart'), 'ok');
+  assert.equal(store.restartVisitorTopic(db, access, chat.id, 'restart'), 'ok');
+  const reset = store.visitorChat(db, access);
+  assert.equal(reset.id, chat.id);
+  assert.equal(reset.code, chat.code);
+  assert.equal(reset.botPending, true);
+  assert.ok(reset.choices.length);
+  assert.equal(reset.messages.length, before.messages.length + 2);
+  assert.deepEqual(reset.messages.slice(0, before.messages.length), before.messages);
+
+  store.postStaffMessage(db, admin, chat.id, 'Bisa dibantu?', 'staff-reply');
+  assert.equal(store.visitorChat(db, access).canRestart, false);
+  assert.equal(store.restartVisitorTopic(db, access, chat.id, 'late-restart'), 'connected');
 });
 
 test('keeps contact with the authorized chat and resumes a confirmed departure for 24 hours', t => {

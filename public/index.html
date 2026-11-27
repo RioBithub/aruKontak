@@ -21,34 +21,36 @@
       </div>
     </header>
 
-    <main class="visitor-layout">
+    <main class="visitor-layout" id="visitor-layout">
       <section class="visitor-intro" aria-labelledby="visitor-title">
         <div class="intro-top">
           <span class="intro-label">Jasa Raharja Care</span>
-          <span class="hero-emblem" aria-hidden="true"><img src="/assets/jrcare-logo.png" alt="" width="365" height="305"></span>
+          <span class="status-pill intro-presence" id="service-presence" data-status="pending" role="status">Memeriksa petugas…</span>
         </div>
         <div class="intro-copy">
           <h1 id="visitor-title">Ada yang bisa <span>kami bantu?</span></h1>
-          <p>Tanya petugas kami soal santunan dan layanan Jasa Raharja.</p>
+          <p>Ajukan pertanyaan tentang santunan dan layanan Jasa Raharja. Bot JRCare akan membantu Anda terhubung dengan petugas.</p>
         </div>
-        <div class="quick-topics" id="quick-topics" role="group" aria-labelledby="topics-title">
-          <p id="topics-title">Pilih topik untuk mulai</p>
-          <div class="topic-list">
-            <button type="button" class="topic" data-topic="Halo, saya ingin bertanya tentang pengajuan santunan." disabled>Pengajuan santunan</button>
-            <button type="button" class="topic" data-topic="Halo, saya ingin menanyakan status pengajuan saya." disabled>Status pengajuan</button>
-            <button type="button" class="topic" data-topic="Halo, saya membutuhkan informasi tentang layanan Jasa Raharja." disabled>Informasi layanan</button>
-          </div>
-        </div>
+        <figure class="intro-art">
+          <img src="/assets/jrcare-help-team.webp" alt="Ilustrasi bot JRCare dan petugas dengan headset" width="960" height="640" fetchpriority="high">
+        </figure>
+        <ul class="intro-features" aria-label="Yang bisa dilakukan melalui live chat">
+          <li><strong>Tanya dan cek status</strong><span>Bahas layanan atau pengajuan Anda bersama petugas.</span></li>
+          <li><strong>Kirim dokumen</strong><span>Lampirkan foto atau PDF langsung di percakapan.</span></li>
+          <li><strong>Lanjutkan kapan saja</strong><span>Simpan kode atau tautan untuk membuka chat lagi.</span></li>
+        </ul>
       </section>
 
       <section class="panel chat-card" id="customer-chat" aria-labelledby="chat-title" data-state="loading">
         <header class="chat-card-header">
-          <span class="chat-symbol" aria-hidden="true"></span>
+          <img id="visitor-avatar" class="chat-face" src="/assets/jrcare-bot.webp" alt="" width="144" height="144">
           <div>
             <h2 id="chat-title">Live chat JRCare</h2>
             <p id="visitor-status" role="status">Menyambungkan…</p>
           </div>
+          <span id="visitor-agent-presence" class="status-pill" hidden></span>
         </header>
+        <p id="visitor-network" class="network-note" role="status" hidden></p>
 
         <div id="visitor-loading" class="chat-loading" aria-hidden="true">
           <span></span><span></span><span></span><span></span>
@@ -74,6 +76,21 @@
           </div>
           <label for="visitor-first">Pesan</label>
           <textarea id="visitor-first" name="message" rows="4" maxlength="2000" placeholder="Tuliskan pertanyaan Anda" required></textarea>
+          <div class="message-suggestions" role="group" aria-labelledby="suggestions-title">
+            <p id="suggestions-title">Saran pesan</p>
+            <div class="topic-list">
+              <button type="button" class="topic" data-topic="Halo, saya ingin bertanya tentang pengajuan santunan.">Pengajuan santunan</button>
+              <button type="button" class="topic" data-topic="Halo, saya ingin menanyakan status pengajuan saya.">Cek status pengajuan</button>
+              <button type="button" class="topic" data-topic="Halo, saya membutuhkan informasi tentang layanan Jasa Raharja.">Informasi layanan</button>
+            </div>
+          </div>
+          <div class="upload-control" data-upload>
+            <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" data-file-input hidden>
+            <button class="attach-button secondary small" type="button" data-choose-file>Lampirkan file</button>
+            <p class="upload-hint">PDF atau foto · maks. 8 MB setelah kompres</p>
+            <p class="upload-note" data-file-note role="status" hidden></p>
+            <div class="upload-preview" data-file-preview hidden></div>
+          </div>
           <button class="primary" type="submit">Mulai chat</button>
         </form>
 
@@ -103,10 +120,21 @@
             </div>
           </div>
           <ol id="visitor-messages" class="messages" role="log" aria-label="Percakapan" aria-relevant="additions"></ol>
-          <div id="visitor-choices" class="visitor-choices" role="group" aria-label="Pilihan layanan" hidden></div>
+          <div id="visitor-topics" class="visitor-topics" hidden>
+            <div id="visitor-choices" class="visitor-choices" role="group" aria-label="Pilihan layanan" hidden></div>
+            <button id="restart-topic" class="secondary small" type="button" hidden>Ulangi topik</button>
+          </div>
           <form id="visitor-reply" class="composer" method="post" hidden>
-            <label class="sr-only" for="visitor-message">Pesan</label>
-            <textarea id="visitor-message" name="message" rows="2" maxlength="2000" placeholder="Tulis pesan Anda" required></textarea>
+            <div class="composer-fields">
+              <label class="sr-only" for="visitor-message">Pesan</label>
+              <textarea id="visitor-message" name="message" rows="2" maxlength="2000" placeholder="Tulis pesan Anda" required></textarea>
+              <div class="upload-control" data-upload>
+                <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" data-file-input hidden>
+                <button class="attach-button secondary small" type="button" data-choose-file>Lampirkan file</button>
+                <p class="upload-note" data-file-note role="status" hidden></p>
+                <div class="upload-preview" data-file-preview hidden></div>
+              </div>
+            </div>
             <button class="primary" type="submit">Kirim</button>
           </form>
           <div id="visitor-closed" class="closed-notice" hidden>

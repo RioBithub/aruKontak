@@ -4,6 +4,8 @@ Live chat web Jasa Raharja Care untuk menerima pertanyaan pelanggan saat kanal W
 
 Pelanggan memasukkan nomor telepon dan dapat menambahkan email saat memulai chat. Kontak tersedia di detail percakapan bagi admin dan agen yang ditugaskan.
 
+Pelanggan dan petugas dapat mengirim satu lampiran PDF, JPG, PNG, atau WebP per pesan. Browser mengecilkan foto dan mengemas PDF secara lossless sebelum dikirim. Batas lampiran adalah 8 MB setelah foto dikompres. Lampiran tersimpan bersama percakapan dan dapat diunduh dari riwayat.
+
 Setiap percakapan memiliki tautan dan kode sendiri. Pelanggan dapat membuka tautan di perangkat lain atau memasukkan kode lewat **Cek chat**. Setelah mengonfirmasi **Tinggalkan chat**, pelanggan dapat memilih **Kembali ke chat** dari browser yang sama selama 24 jam. Petugas tetap dapat membalas dari kotak masuk. Tautan dan kode tersedia untuk membuka riwayat setelah chat selesai atau pilihan kembali berakhir.
 
 ## Menjalankan aplikasi
@@ -36,6 +38,8 @@ Jika portal tidak mengirim sinyal selama 90 detik, agen dianggap offline. Chat o
 
 Alur awal mengirim dua balasan otomatis. Chat baru menerima sapaan dan pilihan layanan dalam satu pesan. Pilihan layanan atau pertanyaan berikutnya memicu satu pesan berisi format data dan pesan tunggu. Pada saat itu chat masuk antrean agen. Pelanggan bisa langsung melengkapi data atau meneruskan obrolan dengan petugas.
 
+**Saran pesan** mengisi draf yang bisa diedit sebelum chat dimulai. Pelanggan bisa memilih **Ulangi topik** selama chat masih ditangani bot atau masih menunggu agen. Pilihan sebelumnya tetap tercatat dalam riwayat.
+
 Di **Diagram alur**, admin dapat menggeser dan menyambungkan blok pesan, pilihan, pengumpulan jawaban, kondisi, penugasan, dan penyelesaian chat. Kondisi dapat memeriksa jam kerja WIB, isi pesan terakhir, kontak, atau jawaban tersimpan. Gunakan variabel seperti `{{name}}` dan `{{nomor_pengajuan}}` di dalam balasan. Jawaban yang dikumpulkan terlihat di detail chat petugas. Pada blok penugasan, admin dapat menetapkan agen prioritas. Sistem memakai antrean biasa jika agen tersebut belum siap.
 
 **Uji alur** menjalankan draf memakai mesin bot yang sama di percakapan uji. **Simpan draf** menyimpan perubahan untuk diedit lagi. **Terbitkan alur** memakai versi tersebut untuk chat baru. Percakapan berjalan menyimpan diagram dan jadwal yang berlaku saat chat dimulai. **Pakai template dua bubble** memuat kembali susunan awal ke draf.
@@ -48,6 +52,6 @@ Untuk `helpdesk-jrcare.aruraharja.co.id`, gunakan [panduan dan installer HestiaC
 
 ### Konfigurasi server Node.js lain
 
-Jalankan satu instance Node.js dengan direktori database persisten. Tentukan alamat HTTPS publik lewat `JRCARE_ORIGIN`, set `NODE_ENV=production`, dan teruskan HTTPS ke port aplikasi melalui reverse proxy. Nonaktifkan buffering respons untuk `/api/visitor/events` dan `/api/staff/events` agar pembaruan Server-Sent Events langsung diteruskan. Gunakan `JRCARE_DATABASE` untuk menunjuk penyimpanan persisten bila direktori `./data/` bawaan tidak persisten. Aktifkan `JRCARE_TRUST_PROXY=1` hanya jika server hanya dapat dijangkau lewat reverse proxy yang mengganti header `X-Real-IP` dengan IP klien.
+Jalankan satu instance Node.js dengan direktori database persisten. Tentukan alamat HTTPS publik lewat `JRCARE_ORIGIN`, set `NODE_ENV=production`, dan teruskan HTTPS ke port aplikasi melalui reverse proxy. Izinkan permintaan hingga 12 MB untuk kiriman lampiran. Nonaktifkan buffering respons untuk `/api/visitor/events` dan `/api/staff/events` agar pembaruan Server-Sent Events langsung diteruskan. Browser mengambil pembaruan lewat API saat koneksi push sedang tersambung ulang. Gunakan `JRCARE_DATABASE` untuk menunjuk penyimpanan persisten bila direktori `./data/` bawaan tidak persisten. Aktifkan `JRCARE_TRUST_PROXY=1` hanya jika server hanya dapat dijangkau lewat reverse proxy yang mengganti header `X-Real-IP` dengan IP klien.
 
 Setelah server berjalan, bagikan URL HTTPS halaman utama ke pelanggan. Sesi chat pelanggan tersimpan pada browser yang sama dan riwayatnya tersimpan di database.

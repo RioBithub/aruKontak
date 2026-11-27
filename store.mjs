@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { automationFor, defaultRules } from './rules.mjs';
-import { agentStates, assignmentEvents, migrateRouting, recordAssignment, routeWaitingChats, routingEnabled } from './routing.mjs';
+import { agentIsOnline, agentStates, assignmentEvents, migrateRouting, recordAssignment, routeWaitingChats, routingEnabled } from './routing.mjs';
 import { runWorkflow, twoMessageWorkflow, workflowChoices } from './workflow.mjs';
 
 const initialAgents = ['Igun', 'Meri', 'Lingga'];
@@ -11,21 +11,28 @@ const resumeLifetime = 24 * 60 * 60 * 1000;
 const staffFields = 'id, username, name, role, password_hash AS passwordHash, temporary';
 const visitorFields = `id, visitor_name AS name, visitor_phone AS phone, visitor_email AS email,
   closed_at AS closedAt, bot_pending AS botPending, bot_menu AS botMenu, bot_workflow AS botWorkflow, bot_progress AS botProgress`;
+const restartAllowed = `c.closed_at IS NULL AND c.assignee_id IS NULL
+  AND (c.bot_menu IS NOT NULL OR c.bot_workflow IS NOT NULL)
+  AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.chat_id = c.id AND m.sender = 'staff')`;
 const chatSummary = `
   SELECT c.id, c.visitor_name AS name, c.assignee_id AS assigneeId, a.name AS agentName,
          c.closed_at AS closedAt, c.updated_at AS updatedAt,
          CASE WHEN c.bot_pending THEN 'bot' ELSE c.routing_state END AS routingState,
          c.assignment_version AS assignmentVersion,
-         (SELECT substr(body, 1, 180) FROM messages
-          WHERE chat_id = c.id AND sender <> 'auto' ORDER BY id DESC LIMIT 1) AS preview
+         (SELECT coalesce(nullif(substr(m.body, 1, 180), ''), f.file_name) FROM messages m
+          LEFT JOIN message_attachments f ON f.message_id = m.id
+          WHERE m.chat_id = c.id AND m.sender <> 'auto' ORDER BY m.id DESC LIMIT 1) AS preview
   FROM chats c LEFT JOIN users a ON a.id = c.assignee_id
 `;
 const visitorSummary = `
   SELECT c.id, c.visitor_name AS name, c.access_code AS code, c.closed_at AS closedAt,
          c.bot_pending AS botPending, c.bot_menu AS botMenu, c.bot_workflow AS botWorkflow,
-         c.bot_progress AS botProgress, a.name AS agentName
+         c.bot_progress AS botProgress, c.assignee_id AS assigneeId, a.name AS agentName,
+         (${restartAllowed}) AS canRestart
   FROM chats c LEFT JOIN users a ON a.id = c.assignee_id
 `;
+const attachmentSummary = `SELECT f.file_name AS name, f.mime_type AS type, f.byte_count AS size, f.encoding, f.data
+  FROM message_attachments f JOIN messages m ON m.id = f.message_id JOIN chats c ON c.id = m.chat_id`;
 
 function chatCode() {
   return randomBytes(16).toString('hex');
@@ -87,6 +94,21 @@ function migrateWorkflow(db) {
     .run(JSON.stringify({ ...rules, mode: 'workflow' }));
 }
 
+function migrateAttachments(db) {
+  if (db.prepare('PRAGMA user_version').get().user_version >= 6) return;
+  db.exec(`
+    CREATE TABLE message_attachments (
+      message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+      file_name TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      byte_count INTEGER NOT NULL,
+      encoding TEXT NOT NULL CHECK (encoding IN ('raw', 'gzip')),
+      data BLOB NOT NULL
+    );
+    PRAGMA user_version = 6;
+  `);
+}
+
 export function openStore(filename) {
   if (filename !== ':memory:') mkdirSync(dirname(filename), { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(filename);
@@ -145,6 +167,7 @@ export function openStore(filename) {
     migrateRouting(db);
     migrateChats(db);
     migrateWorkflow(db);
+    migrateAttachments(db);
   });
   return db;
 }
@@ -225,6 +248,13 @@ export function replaceTemporaryPassword(db, user, passwordHash, session) {
 
 export function listAgents(db) {
   return { agents: agentStates(db), autoAssign: routingEnabled(db) };
+}
+
+export function visitorService(agents) {
+  return {
+    online: agents.some(agent => agent.online),
+    available: agents.some(agent => agent.online && agent.accepting && agent.activeChats < agent.capacity),
+  };
 }
 
 export function createAgent(db, name, username) {
@@ -328,15 +358,38 @@ export function saveDiagram(db, flow, expectedVersion, publish) {
 }
 
 function messagesFor(db, chatId) {
-  return db.prepare(`SELECT id, sender, sender_name AS senderName, body, created_at AS at
-    FROM messages WHERE chat_id = ? ORDER BY id`).all(chatId);
+  return db.prepare(`SELECT m.id, m.sender, m.sender_name AS senderName, m.body, m.created_at AS at,
+      f.file_name AS fileName, f.mime_type AS fileType, f.byte_count AS fileSize
+    FROM messages m LEFT JOIN message_attachments f ON f.message_id = m.id
+    WHERE m.chat_id = ? ORDER BY m.id`).all(chatId).map(({ fileName, fileType, fileSize, ...message }) => {
+    if (fileName) message.attachment = { id: message.id, name: fileName, type: fileType, size: fileSize };
+    return message;
+  });
+}
+
+function attachMessage(db, id, file) {
+  if (!file) return;
+  db.prepare(`INSERT INTO message_attachments (message_id, file_name, mime_type, byte_count, encoding, data)
+    VALUES (?, ?, ?, ?, ?, ?)`).run(id, file.name, file.type, file.size, file.encoding, file.data);
+}
+
+export function visitorAttachment(db, id, { key, code }) {
+  if (!key && !code) return null;
+  const field = code ? 'access_code' : 'visitor_key';
+  return db.prepare(`${attachmentSummary} WHERE f.message_id = ? AND c.${field} = ?`).get(id, code ?? key);
+}
+
+export function staffAttachment(db, id, user) {
+  return db.prepare(`${attachmentSummary} WHERE f.message_id = ? AND (? = 'admin' OR c.assignee_id = ?)`)
+    .get(id, user.role, user.id);
 }
 
 export function visitorHistory(db, key) {
   if (!key) return [];
   return db.prepare(`SELECT c.access_code AS code, c.closed_at AS closedAt, c.updated_at AS updatedAt,
-      (SELECT substr(body, 1, 120) FROM messages WHERE chat_id = c.id AND sender = 'visitor'
-        ORDER BY id LIMIT 1) AS preview
+      (SELECT coalesce(nullif(substr(m.body, 1, 120), ''), f.file_name) FROM messages m
+        LEFT JOIN message_attachments f ON f.message_id = m.id WHERE m.chat_id = c.id AND m.sender = 'visitor'
+        ORDER BY m.id LIMIT 1) AS preview
     FROM chats c WHERE c.visitor_key = ? ORDER BY c.id DESC`).all(key);
 }
 
@@ -349,13 +402,16 @@ export function visitorChatId(db, { key, code, id }) {
 
 function visitorThread(db, id) {
   if (!id) return null;
-  const { botMenu, botWorkflow, botProgress, ...chat } = db.prepare(`${visitorSummary} WHERE c.id = ?`).get(id);
+  const { botMenu, botWorkflow, botProgress, assigneeId, ...chat } = db.prepare(`${visitorSummary} WHERE c.id = ?`).get(id);
   let choices = [];
   if (chat.botPending && !chat.closedAt) {
     if (botWorkflow) choices = workflowChoices(JSON.parse(botWorkflow).flow, JSON.parse(botProgress));
     else if (botMenu) choices = JSON.parse(botMenu).choices.map(({ code, label }) => ({ code, label }));
   }
-  return { ...chat, botPending: Boolean(chat.botPending), choices, messages: messagesFor(db, id) };
+  return {
+    ...chat, botPending: Boolean(chat.botPending), canRestart: Boolean(chat.canRestart),
+    agentOnline: assigneeId ? agentIsOnline(db, assigneeId) : null, choices, messages: messagesFor(db, id),
+  };
 }
 
 export function visitorChat(db, access) {
@@ -383,13 +439,14 @@ export function leaveChat(db, access, id, now = Date.now()) {
   });
 }
 
-function addVisitorMessage(db, chat, body, requestKey, now, rules, isNewChat = false) {
+function addVisitorMessage(db, chat, body, requestKey, now, rules, isNewChat = false, file = null) {
   const { id, name, phone, email, botPending, botMenu, botWorkflow, botProgress } = chat;
   const date = new Date(now);
   let outcome;
   if (botWorkflow && botPending) {
     const { flow, away } = JSON.parse(botWorkflow);
-    outcome = runWorkflow(flow, JSON.parse(botProgress ?? 'null'), { input: body, name, phone, email, away, now: date });
+    const input = body || 'Lampiran';
+    outcome = runWorkflow(flow, JSON.parse(botProgress ?? 'null'), { input, name, phone, email, away, now: date });
   } else if (botWorkflow) {
     outcome = { replies: [] };
   } else {
@@ -399,7 +456,8 @@ function addVisitorMessage(db, chat, body, requestKey, now, rules, isNewChat = f
   const handoff = outcome.handoff || outcome.action === 'handoff';
   const closed = outcome.action === 'close';
   const insertMessage = db.prepare('INSERT INTO messages (chat_id, sender, sender_name, body, created_at, request_key) VALUES (?, ?, ?, ?, ?, ?)');
-  insertMessage.run(id, 'visitor', name, body, now, requestKey);
+  const { lastInsertRowid } = insertMessage.run(id, 'visitor', name, body, now, requestKey);
+  attachMessage(db, lastInsertRowid, file);
   for (const reply of outcome.replies) insertMessage.run(id, 'auto', 'JRCare', reply, now, null);
   db.prepare(`UPDATE chats SET updated_at = ?, bot_pending = ?, bot_progress = coalesce(?, bot_progress),
     closed_at = coalesce(?, closed_at), preferred_agent_id = coalesce(?, preferred_agent_id) WHERE id = ?`)
@@ -408,7 +466,7 @@ function addVisitorMessage(db, chat, body, requestKey, now, rules, isNewChat = f
   if ((isNewChat && !botPending) || (botPending && handoff)) routeWaitingChats(db, now);
 }
 
-export function startChat(db, visitorKey, name, body, requestKey, { phone = null, email = null } = {}) {
+export function startChat(db, visitorKey, name, body, requestKey, { phone = null, email = null, attachment = null } = {}) {
   return transaction(db, () => {
     const retry = db.prepare(`SELECT c.id FROM chats c JOIN messages m ON m.chat_id = c.id
       WHERE c.visitor_key = ? AND m.sender = 'visitor' AND m.request_key = ? LIMIT 1`).get(visitorKey, requestKey);
@@ -419,7 +477,7 @@ export function startChat(db, visitorKey, name, body, requestKey, { phone = null
     const left = db.prepare('DELETE FROM visitor_departures WHERE visitor_key = ?').run(visitorKey).changes;
     const latest = db.prepare(`SELECT ${visitorFields} FROM chats WHERE visitor_key = ? ORDER BY id DESC LIMIT 1`).get(visitorKey);
     if (!left && latest && !latest.closedAt) {
-      addVisitorMessage(db, latest, body, requestKey, now, rules);
+      addVisitorMessage(db, latest, body, requestKey, now, rules, false, attachment);
       return visitorThread(db, latest.id);
     }
 
@@ -430,19 +488,32 @@ export function startChat(db, visitorKey, name, body, requestKey, { phone = null
     const { lastInsertRowid: id } = db.prepare(`INSERT INTO chats
       (visitor_key, visitor_name, visitor_phone, visitor_email, updated_at, access_code, bot_pending, bot_menu, bot_workflow)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(visitorKey, name, phone, email, now, chatCode(), Number(botPending), botMenu, botWorkflow);
-    addVisitorMessage(db, { id, name, phone, email, botPending, botMenu, botWorkflow }, body, requestKey, now, rules, true);
+    addVisitorMessage(db, { id, name, phone, email, botPending, botMenu, botWorkflow }, body, requestKey, now, rules, true, attachment);
     return visitorThread(db, id);
   });
 }
 
-export function postVisitorMessage(db, access, id, body, requestKey) {
+export function postVisitorMessage(db, access, id, body, requestKey, file = null) {
   return transaction(db, () => {
     if (visitorChatId(db, { ...access, id }) !== id) return 'missing';
     const chat = db.prepare(`SELECT ${visitorFields} FROM chats WHERE id = ?`).get(id);
     if (db.prepare("SELECT 1 FROM messages WHERE chat_id = ? AND sender = 'visitor' AND request_key = ?")
       .get(id, requestKey)) return 'ok';
     if (chat.closedAt) return 'closed';
-    addVisitorMessage(db, chat, body, requestKey, Date.now(), getRules(db));
+    addVisitorMessage(db, chat, body, requestKey, Date.now(), getRules(db), false, file);
+    return 'ok';
+  });
+}
+
+export function restartVisitorTopic(db, access, id, requestKey) {
+  return transaction(db, () => {
+    if (visitorChatId(db, { ...access, id }) !== id) return 'missing';
+    if (db.prepare("SELECT 1 FROM messages WHERE chat_id = ? AND sender = 'visitor' AND request_key = ?")
+      .get(id, requestKey)) return 'ok';
+    const chat = db.prepare(`SELECT ${visitorFields} FROM chats c WHERE c.id = ? AND ${restartAllowed}`).get(id);
+    if (!chat) return 'connected';
+    db.prepare('UPDATE chats SET bot_pending = 1, bot_progress = NULL, preferred_agent_id = NULL WHERE id = ?').run(id);
+    addVisitorMessage(db, { ...chat, botPending: true, botProgress: null }, 'Mulai ulang topik', requestKey, Date.now(), getRules(db), true);
     return 'ok';
   });
 }
@@ -462,12 +533,13 @@ export function inbox(db, user, id) {
     FROM chats WHERE id = ?`).get(id);
   chat.contact = { phone, email };
   chat.answers = progress ? JSON.parse(progress).answers : {};
+  chat.agentOnline = chat.assigneeId ? agentIsOnline(db, chat.assigneeId) : null;
   chat.messages = messagesFor(db, id);
   if (user.role === 'admin') chat.assignmentEvents = assignmentEvents(db, id);
   return { chats, chat };
 }
 
-export function postStaffMessage(db, user, id, body, requestKey) {
+export function postStaffMessage(db, user, id, body, requestKey, file = null) {
   return transaction(db, () => {
     const chat = staffChat(db, id, user);
     if (!chat) return 'missing';
@@ -475,8 +547,9 @@ export function postStaffMessage(db, user, id, body, requestKey) {
       .get(id, requestKey)) return 'ok';
     if (chat.closedAt) return 'closed';
     const now = Date.now();
-    db.prepare("INSERT INTO messages (chat_id, sender, sender_name, body, created_at, request_key) VALUES (?, 'staff', ?, ?, ?, ?)")
+    const { lastInsertRowid } = db.prepare("INSERT INTO messages (chat_id, sender, sender_name, body, created_at, request_key) VALUES (?, 'staff', ?, ?, ?, ?)")
       .run(id, user.name, body, now, requestKey);
+    attachMessage(db, lastInsertRowid, file);
     db.prepare('UPDATE chats SET updated_at = ?, bot_pending = 0 WHERE id = ?').run(now, id);
     if (chat.routingState === 'bot') routeWaitingChats(db, now);
     return 'ok';

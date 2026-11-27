@@ -1,7 +1,11 @@
 import { api, byId, element, followUpdates, notice, postMessage, renderMessages, timeLabel } from './common.js';
+import { attachmentPicker } from './attachments.js';
 
 const startForm = byId('start-form');
 const replyForm = byId('visitor-reply');
+const startUpload = attachmentPicker(startForm);
+const replyUpload = attachmentPicker(replyForm);
+const restartTopic = byId('restart-topic');
 const choicePanel = byId('visitor-choices');
 const messageInput = byId('visitor-message');
 const status = byId('visitor-status');
@@ -27,6 +31,9 @@ let resumeTimer = null;
 let startingNew = false;
 let leaveDestination = '/';
 let leaving = false;
+let restarting = false;
+let service = null;
+let failedReads = 0;
 
 function parseCode(value) {
   const input = value.trim();
@@ -54,16 +61,17 @@ function renderChoices(choices) {
     choicePanel.dataset.options = key;
   }
   choicePanel.hidden = !choices.length;
-  for (const button of choicePanel.children) button.disabled = submitting;
+  for (const button of choicePanel.children) button.disabled = submitting || restarting;
   messageInput.placeholder = choices.length ? 'Ketik kode pilihan atau tulis pertanyaan' : 'Tulis pesan Anda';
 }
 
 function render(forceScroll = false) {
   const choices = chat?.choices ?? [];
   const saved = !viewingHistory && !chat ? resume : null;
+  const answeringStaff = chat?.messages.findLast(message => message.sender === 'staff')?.senderName;
+  byId('visitor-layout').dataset.mode = chat ? 'thread' : viewingHistory ? 'history' : 'start';
   byId('visitor-loading').hidden = ready;
   byId('visitor-lookup').hidden = !viewingHistory;
-  byId('quick-topics').hidden = viewingHistory || Boolean(choices.length) || Boolean(saved && !startingNew);
   byId('visitor-resume').hidden = !saved;
   startForm.hidden = !ready || viewingHistory || Boolean(chat) || (Boolean(saved) && !startingNew);
   if (saved) {
@@ -80,10 +88,15 @@ function render(forceScroll = false) {
     replyForm.hidden = Boolean(chat.closedAt);
     byId('visitor-closed').hidden = !chat.closedAt;
     byId('leave-chat').hidden = Boolean(chat.closedAt);
-    byId('leave-chat').disabled = submitting;
+    byId('leave-chat').disabled = submitting || restarting;
     renderMessages(byId('visitor-messages'), chat, 'visitor', forceScroll);
   }
+  const showRestart = Boolean(chat?.canRestart);
+  byId('visitor-topics').hidden = !choices.length && !showRestart;
+  restartTopic.hidden = !showRestart;
+  restartTopic.disabled = restarting || submitting;
   renderChoices(choices);
+  renderPresence(Boolean(answeringStaff));
   let state = 'loading';
   let label = 'Menyambungkan…';
   if (viewingHistory) {
@@ -92,12 +105,12 @@ function render(forceScroll = false) {
   } else if (chat?.closedAt) {
     state = 'closed';
     label = 'Selesai';
-  } else if (!connected) {
-    state = 'disconnected';
-    label = 'Koneksi terputus. Menyambungkan kembali…';
   } else if (chat?.agentName) {
     state = 'active';
     label = `Ditangani oleh ${chat.agentName}`;
+  } else if (answeringStaff) {
+    state = 'active';
+    label = `Dibantu oleh ${answeringStaff}`;
   } else if (chat?.botPending) {
     state = 'active';
     label = choices.length ? 'Pilih layanan' : 'Balasan otomatis';
@@ -109,8 +122,32 @@ function render(forceScroll = false) {
     label = 'Mulai percakapan';
   }
   panel.dataset.state = state;
-  for (const button of topicButtons) button.disabled = !ready || submitting;
+  notice(byId('visitor-network'), connected || viewingHistory || chat?.closedAt ? ''
+    : navigator.onLine ? 'Menyambungkan kembali ke chat…' : 'Internet Anda sedang offline. Chat akan tersambung kembali otomatis.');
+  for (const button of topicButtons) button.disabled = submitting;
   if (status.textContent !== label) status.textContent = label;
+}
+
+function renderPresence(answeringStaff) {
+  const availability = byId('service-presence');
+  availability.hidden = viewingHistory && !service;
+  const state = !service ? 'pending' : service.available ? 'online' : service.online ? 'busy' : 'offline';
+  const label = {
+    pending: 'Memeriksa petugas…', online: 'Petugas siap menerima chat',
+    busy: 'Petugas online · antrean', offline: 'Petugas sedang offline',
+  }[state];
+  availability.dataset.status = state;
+  if (availability.textContent !== label) availability.textContent = label;
+  const agent = byId('visitor-agent-presence');
+  const assigned = Boolean(chat?.agentName && !chat.closedAt);
+  const teamStatus = Boolean(chat && !chat.closedAt && service);
+  const online = assigned ? chat.agentOnline : service?.online;
+  agent.hidden = !assigned && !teamStatus;
+  agent.dataset.status = online ? 'online' : 'offline';
+  agent.textContent = assigned ? (online ? 'Online' : 'Offline') : (online ? 'Petugas online' : 'Petugas offline');
+  const avatar = byId('visitor-avatar');
+  const src = `/assets/jrcare-${assigned || (answeringStaff && !chat.closedAt) ? 'agent' : 'bot'}.webp`;
+  if (avatar.getAttribute('src') !== src) avatar.src = src;
 }
 
 async function loadHistory(message = '') {
@@ -151,17 +188,13 @@ function connectUpdates() {
     signal: updates.signal,
     code,
     onUpdate: () => void refresh(),
-    onDisconnect: () => {
-      connected = false;
-      render();
-    },
-    onInvalid: () => void loadHistory('Chat tidak ditemukan. Periksa tautan atau kode chat Anda.'),
   });
 }
 
 function showChat(next, forceScroll = false) {
   ready = true;
   connected = true;
+  failedReads = 0;
   if (next?.closedAt && !code && params.has('baru') && !forceScroll) {
     byId('visitor-name').value = next.name;
   } else if (next) {
@@ -178,7 +211,7 @@ function showChat(next, forceScroll = false) {
 
 async function refresh() {
   if (viewingHistory || (chat?.closedAt && ready) || (document.hidden && ready)) return;
-  if (readRequest || submitting) {
+  if (readRequest || (submitting && !chat)) {
     refreshPending = true;
     return;
   }
@@ -189,6 +222,7 @@ async function refresh() {
   try {
     const data = await api('/api/visitor/chat', undefined, controller.signal, code);
     if (readRequest === controller && !viewingHistory) {
+      service = data.service ?? service;
       resume = data.resume ?? null;
       clearTimeout(resumeTimer);
       if (resume) resumeTimer = setTimeout(() => {
@@ -203,7 +237,8 @@ async function refresh() {
     if (error.status === 404 && code) {
       void loadHistory(error.message);
     } else {
-      connected = false;
+      failedReads++;
+      if (!navigator.onLine || failedReads >= 2) connected = false;
       render();
       retryTimer = setTimeout(refresh, 3_000);
     }
@@ -216,7 +251,13 @@ async function refresh() {
 }
 
 async function send(form, path, payload, clearDraft = true) {
-  if (submitting) return;
+  if (submitting || restarting) return;
+  const picker = form === startForm ? startUpload : replyUpload;
+  if (clearDraft && picker.preparing) {
+    notice(feedback, 'Tunggu lampiran selesai dikompres.');
+    return;
+  }
+  if (clearDraft && picker.file) payload.attachment = picker.file;
   readRequest?.abort();
   readRequest = null;
   submitting = true;
@@ -226,13 +267,15 @@ async function send(form, path, payload, clearDraft = true) {
   button.disabled = true;
   button.textContent = 'Mengirim…';
   form.setAttribute('aria-busy', 'true');
+  picker.lock(true);
   for (const field of fields) field.readOnly = true;
   notice(feedback);
   render();
   try {
     const result = await postMessage(path, form, payload, code);
     if (clearDraft) form.reset();
-    showChat(result.chat, true);
+    if (!chat || result.chat.messages.length > chat.messages.length) showChat(result.chat, true);
+    else render(true);
     if (!chat.closedAt) messageInput.focus();
   } catch (error) {
     notice(feedback, error.message, true);
@@ -241,6 +284,7 @@ async function send(form, path, payload, clearDraft = true) {
     button.disabled = false;
     button.textContent = buttonLabel;
     form.removeAttribute('aria-busy');
+    picker.lock(false);
     for (const field of fields) field.readOnly = false;
     render();
     void refresh();
@@ -255,6 +299,24 @@ startForm.addEventListener('submit', event => {
     email: byId('visitor-email').value,
     text: byId('visitor-first').value,
   });
+});
+
+restartTopic.addEventListener('click', async () => {
+  if (restarting || submitting || !chat?.canRestart) return;
+  restarting = true;
+  notice(feedback);
+  render();
+  try {
+    const result = await postMessage('/api/visitor/restart', restartTopic, { chatId: chat.id }, code);
+    if (result.chat.messages.length > chat.messages.length) showChat(result.chat, true);
+    notice(feedback, 'Pilihan topik dimulai ulang.');
+  } catch (error) {
+    notice(feedback, error.message, true);
+  } finally {
+    restarting = false;
+    render();
+    void refresh();
+  }
 });
 replyForm.addEventListener('submit', event => {
   event.preventDefault();
@@ -289,7 +351,7 @@ for (const link of document.querySelectorAll('.site-bar a')) {
   link.addEventListener('click', event => {
     if (!chat || chat.closedAt || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
-    if (!submitting) askToLeave(link.getAttribute('href'));
+    if (!submitting && !restarting) askToLeave(link.getAttribute('href'));
   });
 }
 
@@ -331,14 +393,9 @@ byId('share-chat').addEventListener('click', async () => {
   }
 });
 
-for (const [index, button] of topicButtons.entries()) {
+for (const button of topicButtons) {
   button.addEventListener('click', () => {
-    if (!ready || submitting) return;
-    if (chat?.closedAt) {
-      location.assign(`/?baru=1&topik=${index + 1}`);
-      return;
-    }
-    const draft = byId(chat ? 'visitor-message' : 'visitor-first');
+    const draft = byId('visitor-first');
     if (!draft.value.trim() || draft.value === draft.dataset.topicDraft) {
       draft.value = button.dataset.topic;
       draft.dataset.topicDraft = draft.value;
@@ -348,6 +405,14 @@ for (const [index, button] of topicButtons.entries()) {
 }
 
 document.addEventListener('visibilitychange', () => void refresh());
+window.addEventListener('online', () => void refresh());
+window.addEventListener('offline', () => {
+  connected = false;
+  render();
+});
+setInterval(() => {
+  if (ready && !chat && !viewingHistory) void refresh();
+}, 8_000);
 window.addEventListener('hashchange', () => {
   if (location.pathname === '/chat' && parseCode(location.hash) !== code) location.reload();
 });

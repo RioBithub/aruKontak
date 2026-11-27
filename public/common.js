@@ -26,7 +26,7 @@ function chatHeaders(code) {
 }
 
 export async function api(path, body, signal, code) {
-  const timeout = AbortSignal.timeout(12_000);
+  const timeout = AbortSignal.timeout(body?.attachment ? 120_000 : 12_000);
   const options = { signal: signal ? AbortSignal.any([signal, timeout]) : timeout, headers: chatHeaders(code) };
   if (body !== undefined) {
     options.method = 'POST';
@@ -49,56 +49,71 @@ export async function api(path, body, signal, code) {
   return data;
 }
 
-export async function followUpdates(path, { signal, code, onUpdate, onDisconnect, onInvalid }) {
-  let delay = 1_000;
-  while (!signal.aborted) {
-    const attempt = new AbortController();
-    let timeout = setTimeout(() => attempt.abort(), 12_000);
-    try {
-      const response = await fetch(path, { headers: chatHeaders(code), signal: AbortSignal.any([signal, attempt.signal]) });
-      clearTimeout(timeout);
-      if (response.status === 401 || response.status === 404) {
-        await response.body?.cancel();
-        if (!signal.aborted) onInvalid(response.status);
-        return;
-      }
-      if (!response.ok || !response.headers.get('content-type')?.startsWith('text/event-stream')) {
-        await response.body?.cancel();
-      } else {
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        while (!signal.aborted) {
-          timeout = setTimeout(() => attempt.abort(), 40_000);
-          const { value, done } = await reader.read();
-          clearTimeout(timeout);
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const end = buffer.lastIndexOf('\n\n');
-          if (end < 0) continue;
-          const frames = buffer.slice(0, end).split('\n\n');
-          buffer = buffer.slice(end + 2);
-          if (frames.includes('data: refresh')) {
-            delay = 1_000;
-            onUpdate();
+export async function followUpdates(path, { signal, code, onUpdate }) {
+  let streaming = false;
+  let lastSync = 0;
+  let delay = 800;
+  const sync = () => {
+    if (signal.aborted || document.hidden) return;
+    lastSync = Date.now();
+    onUpdate();
+  };
+  const fallback = setInterval(() => {
+    if (Date.now() - lastSync >= (streaming ? 8_000 : 1_500)) sync();
+  }, 750);
+  window.addEventListener('online', sync);
+  try {
+    while (!signal.aborted) {
+      const attempt = new AbortController();
+      let timeout = setTimeout(() => attempt.abort(), 10_000);
+      try {
+        const response = await fetch(path, {
+          headers: { Accept: 'text/event-stream', ...chatHeaders(code) }, cache: 'no-store',
+          signal: AbortSignal.any([signal, attempt.signal]),
+        });
+        clearTimeout(timeout);
+        if (!response.ok || !response.headers.get('content-type')?.startsWith('text/event-stream')) {
+          await response.body?.cancel();
+        } else {
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          while (!signal.aborted) {
+            timeout = setTimeout(() => attempt.abort(), 40_000);
+            const { value, done } = await reader.read();
+            clearTimeout(timeout);
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const end = buffer.lastIndexOf('\n\n');
+            if (end < 0) continue;
+            const frames = buffer.slice(0, end).split('\n\n');
+            buffer = buffer.slice(end + 2);
+            streaming = true;
+            delay = 800;
+            if (frames.includes('data: refresh')) sync();
           }
         }
+      } catch {
+        // Keep synchronizing through the API while reopening the stream.
+      } finally {
+        clearTimeout(timeout);
+        attempt.abort();
+        streaming = false;
       }
-    } catch {
-      // Reconnect after a network failure or an interrupted stream.
-    } finally {
-      clearTimeout(timeout);
-      attempt.abort();
+      if (signal.aborted) return;
+      if (Date.now() - lastSync >= 750) sync();
+      await new Promise(resolve => setTimeout(resolve, delay));
+      delay = Math.min(delay * 2, 5_000);
     }
-    if (signal.aborted) return;
-    onDisconnect();
-    await new Promise(resolve => setTimeout(resolve, delay));
-    delay = Math.min(delay * 2, 10_000);
+  } finally {
+    clearInterval(fallback);
+    window.removeEventListener('online', sync);
   }
 }
 
 export async function postMessage(path, form, payload, code) {
-  const signature = JSON.stringify([path, payload]);
+  const { attachment, ...fields } = payload;
+  const signature = JSON.stringify([path, fields, attachment?.clientId]);
   let pending = pendingMessages.get(form);
   if (pending?.signature !== signature) {
     const bytes = crypto.getRandomValues(new Uint8Array(16));
@@ -109,6 +124,45 @@ export async function postMessage(path, form, payload, code) {
   const result = await api(path, { ...payload, requestKey: pending.key }, undefined, code);
   pendingMessages.delete(form);
   return result;
+}
+
+const sizes = new Intl.NumberFormat('id-ID', { maximumFractionDigits: 1 });
+export function sizeLabel(bytes) {
+  return bytes < 1024 * 1024 ? `${sizes.format(Math.max(1, bytes / 1024))} KB` : `${sizes.format(bytes / (1024 * 1024))} MB`;
+}
+
+function attachmentButton(file, perspective, code) {
+  const button = element('button', 'message-attachment');
+  button.type = 'button';
+  const icon = element('span', 'file-symbol', file.type.startsWith('image/') ? 'IMG' : 'PDF');
+  icon.setAttribute('aria-hidden', 'true');
+  const label = element('span');
+  const detail = element('small', '', `${sizeLabel(file.size)} · Unduh`);
+  label.append(element('strong', '', file.name), detail);
+  button.append(icon, label);
+  button.setAttribute('aria-label', `Unduh ${file.name}`);
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    detail.textContent = 'Mengunduh…';
+    try {
+      const response = await fetch(`/api/${perspective}/attachments/${file.id}`, {
+        headers: chatHeaders(code), signal: AbortSignal.timeout(90_000),
+      });
+      if (!response.ok) throw new Error('Unduh gagal');
+      const url = URL.createObjectURL(await response.blob());
+      const link = element('a');
+      link.href = url;
+      link.download = file.name;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 30_000);
+      detail.textContent = `${sizeLabel(file.size)} · Unduh lagi`;
+    } catch {
+      detail.textContent = 'Unduh gagal. Coba lagi.';
+    } finally { button.disabled = false; }
+  });
+  return button;
 }
 
 export function timeLabel(timestamp, showDate = false) {
@@ -136,9 +190,20 @@ export function renderMessages(list, chat, perspective, forceScroll = false) {
     item.classList.toggle('own', own);
     item.classList.toggle('auto', message.sender === 'auto');
     const info = element('div', 'message-info');
-    const sender = message.sender === 'auto' ? 'Balasan otomatis' : message.senderName;
-    info.append(element('strong', '', sender), timeLabel(message.at, true));
-    item.append(info, element('p', '', message.body));
+    const sender = message.sender === 'auto' ? 'Bot JRCare' : message.senderName;
+    const identity = element('span', 'message-identity');
+    if (message.sender === 'auto' || (!own && message.sender === 'staff')) {
+      const avatar = element('img', 'message-avatar');
+      avatar.src = `/assets/jrcare-${message.sender === 'auto' ? 'bot' : 'agent'}.webp`;
+      avatar.alt = '';
+      avatar.width = avatar.height = 28;
+      identity.append(avatar);
+    }
+    identity.append(element('strong', '', sender));
+    info.append(identity, timeLabel(message.at, true));
+    item.append(info);
+    if (message.body) item.append(element('p', '', message.body));
+    if (message.attachment) item.append(attachmentButton(message.attachment, perspective, chat.code));
     fragment.append(item);
   }
   list.append(fragment);

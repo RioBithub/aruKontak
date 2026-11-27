@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { isIP } from 'node:net';
 import { parseArgs, promisify } from 'node:util';
+import { attachmentBytes, maxAttachmentRequest, prepareAttachment } from './attachments.mjs';
 import * as store from './store.mjs';
 import { validateRules } from './rules.mjs';
 import { previewWorkflow, validateWorkflow } from './workflow.mjs';
@@ -36,20 +37,26 @@ const rateBuckets = new Map();
 let lastPruned = 0;
 const updateStreams = new Set();
 const updateEvent = 'data: refresh\n\n';
+const visitorWritePaths = new Set(['/api/visitor/chat', '/api/visitor/message']);
 const updatesAfter = db.prepare(`SELECT id, chat_id AS chatId, previous_agent_id AS previousAgentId, agent_id AS agentId
   FROM assignment_events WHERE id > ? ORDER BY id`);
 const chatAgent = db.prepare('SELECT assignee_id AS id FROM chats WHERE id = ?');
 let lastPublishedAssignment = db.prepare('SELECT coalesce(max(id), 0) AS id FROM assignment_events').get().id;
+let presence = readPresence();
 
 const staticFiles = new Map([
   ['/', ['index.html', 'text/html']],
   ['/petugas', ['staff.html', 'text/html']],
   ['/style.css', ['style.css', 'text/css']],
   ['/common.js', ['common.js', 'text/javascript']],
+  ['/attachments.js', ['attachments.js', 'text/javascript']],
   ['/visitor.js', ['visitor.js', 'text/javascript']],
   ['/staff.js', ['staff.js', 'text/javascript']],
   ['/workflow.js', ['workflow.js', 'text/javascript']],
   ['/assets/jrcare-logo.png', ['assets/jrcare-logo.png', 'image/png']],
+  ['/assets/jrcare-help-team.webp', ['assets/jrcare-help-team.webp', 'image/webp']],
+  ['/assets/jrcare-bot.webp', ['assets/jrcare-bot.webp', 'image/webp']],
+  ['/assets/jrcare-agent.webp', ['assets/jrcare-agent.webp', 'image/webp']],
   ['/assets/plus-jakarta-sans.woff2', ['assets/plus-jakarta-sans.woff2', 'font/woff2']],
 ].map(([path, [file, type]]) => [path, {
   bytes: readFileSync(new URL(`./public/${file}`, import.meta.url)),
@@ -181,10 +188,17 @@ function emailOf(value) {
   return email;
 }
 
-function messageOf(value) {
+function messageOf(value, allowEmpty = false) {
   const body = typeof value === 'string' ? value.trim() : '';
-  if (!body || body.length > 2_000) throw new HttpError(400, 'Isi pesan, maksimal 2.000 karakter.');
+  if ((!body && !allowEmpty) || body.length > 2_000) throw new HttpError(400, 'Isi pesan atau tambahkan lampiran. Pesan maksimal 2.000 karakter.');
   return body;
+}
+
+async function messageAttachment(request, input) {
+  if (input === null || input === undefined) return null;
+  limit(request, 'attachment', 36, 60_000);
+  try { return await prepareAttachment(input); }
+  catch (error) { throw new HttpError(400, error.message); }
 }
 
 function requestKeyOf(value) {
@@ -205,6 +219,7 @@ function checkChatResult(result) {
   if (result === 'closed') throw new HttpError(409, 'Chat ini sudah selesai.');
   if (result === 'changed') throw new HttpError(409, 'Penugasan baru saja berubah. Periksa agen saat ini dan coba lagi.');
   if (result === 'agent') throw new HttpError(400, 'Pilih salah satu agen yang terdaftar.');
+  if (result === 'connected') throw new HttpError(409, 'Topik dapat diulang sebelum chat ditangani petugas.');
 }
 
 function visitorAccess(request) {
@@ -220,6 +235,16 @@ function requireVisitorChat(chat) {
 
 function writeUpdate(response, frame) {
   if (!response.destroyed && !response.write(frame)) response.destroy();
+}
+
+function readPresence() {
+  const { agents, autoAssign } = store.listAgents(db);
+  const service = store.visitorService(agents);
+  return {
+    service,
+    publicKey: JSON.stringify([service, agents.filter(agent => agent.online).map(agent => agent.id)]),
+    teamKey: JSON.stringify([autoAssign, agents.map(({ id, online, accepting, status, activeChats, capacity }) => [id, online, accepting, status, activeChats, capacity])]),
+  };
 }
 
 function openUpdateStream(request, response, path) {
@@ -243,6 +268,10 @@ function openUpdateStream(request, response, path) {
 }
 
 function publishUpdates(changedChats = new Set()) {
+  const current = readPresence();
+  const publicChanged = current.publicKey !== presence.publicKey;
+  const teamChanged = current.teamKey !== presence.teamKey;
+  presence = current;
   const agentIds = new Set();
   for (const id of changedChats) agentIds.add(chatAgent.get(id)?.id);
   for (const { id, chatId, previousAgentId, agentId } of updatesAfter.all(lastPublishedAssignment)) {
@@ -251,9 +280,10 @@ function publishUpdates(changedChats = new Set()) {
     agentIds.add(previousAgentId);
     agentIds.add(agentId);
   }
-  if (!changedChats.size) return;
+  if (!changedChats.size && !publicChanged && !teamChanged) return;
   for (const { response, chatId, staffId, admin } of updateStreams) {
-    if (changedChats.has(chatId) || admin || (staffId && agentIds.has(staffId))) writeUpdate(response, updateEvent);
+    if ((chatId && (changedChats.has(chatId) || publicChanged))
+      || (admin && (changedChats.size || teamChanged)) || (staffId && agentIds.has(staffId))) writeUpdate(response, updateEvent);
   }
 }
 
@@ -285,8 +315,8 @@ function readApi(request, response, url) {
     case '/api/visitor/chat': {
       const access = visitorAccess(request);
       if (!access.key) setCookie(response, visitorCookie, newToken(), visitorAge, '/api/visitor');
-      if (access.code) return { chat: requireVisitorChat(store.visitorChat(db, access)) };
-      return store.visitorSession(db, access.key);
+      if (access.code) return { chat: requireVisitorChat(store.visitorChat(db, access)), service: presence.service };
+      return { ...store.visitorSession(db, access.key), service: presence.service };
     }
     case '/api/visitor/history':
       return { chats: store.visitorHistory(db, readCookie(request, visitorCookie)) };
@@ -298,7 +328,9 @@ function readApi(request, response, url) {
     case '/api/staff/inbox': {
       const user = requireStaff(request);
       const id = url.searchParams.has('chat') ? idOf(url.searchParams.get('chat')) : null;
-      return store.inbox(db, user, id);
+      const inbox = store.inbox(db, user, id);
+      if (user.role === 'admin' && id) inbox.agents = store.listAgents(db).agents;
+      return inbox;
     }
     case '/api/staff/agents':
       requireStaff(request, { admin: true });
@@ -323,16 +355,25 @@ async function writeApi(request, response, path, body, changedChats) {
       if (!access.key && (path === '/api/visitor/chat' || !access.code)) {
         throw new HttpError(409, 'Sesi chat belum siap. Muat ulang halaman lalu coba lagi.');
       }
-      const message = messageOf(body.text);
+      const attachment = await messageAttachment(request, body.attachment);
+      const message = messageOf(body.text, Boolean(attachment));
       const requestKey = requestKeyOf(body.requestKey);
       if (path === '/api/visitor/chat') {
-        const contact = { phone: phoneOf(body.phone), email: emailOf(body.email) };
+        const contact = { phone: phoneOf(body.phone), email: emailOf(body.email), attachment };
         const chat = store.startChat(db, access.key, nameOf(body.name), message, requestKey, contact);
         changedChats.add(chat.id);
         return { chat };
       }
       const id = idOf(body.chatId);
-      checkChatResult(store.postVisitorMessage(db, access, id, message, requestKey));
+      checkChatResult(store.postVisitorMessage(db, access, id, message, requestKey, attachment));
+      changedChats.add(id);
+      return { chat: store.visitorChat(db, { ...access, id }) };
+    }
+    case '/api/visitor/restart': {
+      limit(request, 'visitor', 180, 60_000);
+      const access = visitorAccess(request);
+      const id = idOf(body.chatId);
+      checkChatResult(store.restartVisitorTopic(db, access, id, requestKeyOf(body.requestKey)));
       changedChats.add(id);
       return { chat: store.visitorChat(db, { ...access, id }) };
     }
@@ -438,7 +479,7 @@ async function writeApi(request, response, path, body, changedChats) {
       if (!Array.isArray(body.messages) || !body.messages.length || body.messages.length > 24) {
         throw new HttpError(400, 'Masukkan 1–24 pesan untuk simulasi.');
       }
-      const messages = body.messages.map(messageOf);
+      const messages = body.messages.map(value => messageOf(value));
       const { away } = store.getRules(db);
       let now = new Date();
       if (body.hours === 'outside') now = new Date('2026-01-05T23:59:00+07:00');
@@ -480,7 +521,10 @@ async function writeApi(request, response, path, body, changedChats) {
     const [, rawId, action] = thread;
     const id = idOf(rawId);
     const user = requireStaff(request, { admin: action === 'assign' });
-    if (action === 'message') checkChatResult(store.postStaffMessage(db, user, id, messageOf(body.text), requestKeyOf(body.requestKey)));
+    if (action === 'message') {
+      const file = await messageAttachment(request, body.attachment);
+      checkChatResult(store.postStaffMessage(db, user, id, messageOf(body.text, Boolean(file)), requestKeyOf(body.requestKey), file));
+    }
     if (action === 'assign') {
       const agentId = body.agentId === null ? null : idOf(body.agentId);
       const { hold, expectedVersion } = body;
@@ -503,8 +547,22 @@ function sendJson(response, status, data) {
   response.end(JSON.stringify(data));
 }
 
+async function sendAttachment(request, response, group, id) {
+  const file = group === 'staff'
+    ? store.staffAttachment(db, id, requireStaff(request))
+    : store.visitorAttachment(db, id, visitorAccess(request));
+  if (!file) throw new HttpError(404, 'Lampiran tidak tersedia.');
+  const bytes = await attachmentBytes(file);
+  const filename = encodeURIComponent(file.name).replace(/['()*]/g, character => `%${character.charCodeAt(0).toString(16)}`);
+  response.writeHead(200, {
+    'Content-Type': file.type, 'Content-Length': bytes.length, 'Cache-Control': 'private, no-store',
+    'Content-Disposition': `attachment; filename*=UTF-8''${filename}`,
+  });
+  response.end(bytes);
+}
+
 const server = createServer({ headersTimeout: 10_000, requestTimeout: 30_000 }, async (request, response) => {
-  response.setHeader('Content-Security-Policy', "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
+  response.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
   response.setHeader('X-Content-Type-Options', 'nosniff');
   response.setHeader('Referrer-Policy', 'no-referrer');
   if (secureCookies) response.setHeader('Strict-Transport-Security', 'max-age=31536000');
@@ -526,12 +584,22 @@ const server = createServer({ headersTimeout: 10_000, requestTimeout: 30_000 }, 
     if (request.method === 'GET' && ['/api/visitor/events', '/api/staff/events'].includes(url.pathname)) {
       return openUpdateStream(request, response, url.pathname);
     }
-    if (request.method === 'GET') return sendJson(response, 200, readApi(request, response, url));
+    if (request.method === 'GET') {
+      const fileRoute = url.pathname.match(/^\/api\/(visitor|staff)\/attachments\/(\d+)$/);
+      if (fileRoute) return await sendAttachment(request, response, fileRoute[1], idOf(fileRoute[2]));
+      return sendJson(response, 200, readApi(request, response, url));
+    }
     if (request.method !== 'POST') throw new HttpError(405, 'Metode tidak didukung.');
     verifyOrigin(request);
     const diagram = url.pathname === '/api/staff/workflow' || url.pathname === '/api/staff/workflow/preview';
     if (diagram) requireStaff(request, { admin: true });
-    const body = await jsonBody(request, diagram ? diagramBodyLimit : bodyLimit);
+    const staffMessage = /^\/api\/staff\/chats\/\d+\/message$/.test(url.pathname);
+    if (staffMessage) requireStaff(request);
+    const allowFile = staffMessage || visitorWritePaths.has(url.pathname);
+    if (allowFile && !staffMessage && !cookieToken(request, visitorCookie) && !visitorAccess(request).code) {
+      throw new HttpError(409, 'Sesi chat belum siap. Muat ulang halaman lalu coba lagi.');
+    }
+    const body = await jsonBody(request, allowFile ? maxAttachmentRequest : diagram ? diagramBodyLimit : bodyLimit);
     const changedChats = new Set();
     const result = await writeApi(request, response, url.pathname, body, changedChats);
     publishUpdates(changedChats);

@@ -1,5 +1,6 @@
 import { api, byId, element, followUpdates, notice, postMessage, renderMessages, timeLabel } from './common.js';
 import { openDiagram, resetDiagram } from './workflow.js';
+import { attachmentPicker } from './attachments.js';
 
 const authForms = ['login', 'setup', 'change'].map(name => byId(`${name}-form`));
 const navButtons = [...document.querySelectorAll('[data-view]')];
@@ -15,7 +16,7 @@ const officeNote = byId('office-notice');
 const authNote = byId('auth-error');
 const rulesNote = byId('rules-note');
 const dialog = byId('password-dialog');
-const connectionMessage = 'Koneksi terputus. Menyambungkan kembali…';
+const connectionMessage = 'Menyambungkan kembali ke portal…';
 const agentStatus = { pending: 'Belum aktif', temporary: 'Menunggu aktivasi', active: 'Aktif' };
 const agentList = byId('agent-list');
 const autoRouting = byId('routing-enabled');
@@ -44,6 +45,7 @@ let teamRequest = null;
 let presenceRequest = null;
 let lastPresence = null;
 let working = false;
+let sendingReply = false;
 let scrollAfterSend = false;
 
 function cancelRead() {
@@ -163,13 +165,17 @@ function renderThread() {
     element('dt', '', key.replaceAll('_', ' ')), element('dd', '', value),
   ]));
   byId('thread-status').textContent = closedAt ? 'Selesai' : agentName ? `Ditugaskan ke ${agentName}` : queueLabel(selectedChat);
+  const presence = byId('thread-agent-presence');
+  presence.hidden = Boolean(closedAt || !assigneeId);
+  presence.dataset.status = selectedChat.agentOnline ? 'online' : 'offline';
+  presence.textContent = selectedChat.agentOnline ? 'Online' : 'Offline';
   byId('thread-tools').hidden = Boolean(closedAt);
   byId('staff-reply').hidden = Boolean(closedAt);
   if (user.role === 'admin') {
     const botPending = selectedChat.routingState === 'bot';
-    const options = JSON.stringify([botPending, agents.map(({ id, name, status }) => [id, name, status])]);
+    const options = JSON.stringify([botPending, agents.map(({ id, name, status, online }) => [id, name, status, online])]);
     if (options !== agentOptionsKey) {
-      const choices = agents.map(agent => new Option(agent.status === 'active' ? agent.name : `${agent.name} · ${agentStatus[agent.status]}`, agent.id));
+      const choices = agents.map(agent => new Option(`${agent.name} · ${agent.online ? 'Online' : 'Offline'}`, agent.id));
       assignment.replaceChildren(new Option('Antrean otomatis', ''), new Option('Tahan di antrean', 'hold'), ...choices);
       if (botPending) {
         const bot = new Option('Balasan otomatis', 'bot');
@@ -188,7 +194,7 @@ function renderThread() {
 }
 
 async function refreshInbox() {
-  if (!user || view !== 'inbox' || working || document.hidden) return;
+  if (!user || view !== 'inbox' || (working && !sendingReply) || document.hidden) return;
   if (readRequest) {
     inboxDirty = true;
     return;
@@ -203,6 +209,7 @@ async function refreshInbox() {
     if (readRequest !== controller) return;
     if (officeNote.textContent === connectionMessage) notice(officeNote);
     chats = data.chats;
+    if (data.agents) agents = data.agents;
     selectedChat = data.chat;
     if (selectedId && !selectedChat) {
       selectedId = null;
@@ -233,9 +240,7 @@ function connectInbox() {
   inboxUpdates = new AbortController();
   void followUpdates('/api/staff/events', {
     signal: inboxUpdates.signal,
-    onUpdate: () => void refreshInbox(),
-    onDisconnect: () => notice(officeNote, connectionMessage, true),
-    onInvalid: () => endSession(),
+    onUpdate: () => { if (view === 'agents') void refreshTeam(); else void refreshInbox(); },
   });
 }
 
@@ -255,12 +260,13 @@ async function openView(next) {
     else button.removeAttribute('aria-current');
   }
   notice(officeNote);
+  if (view === 'inbox' || view === 'agents') connectInbox();
+  else disconnectInbox();
   if (view === 'inbox') {
     renderQueue();
     renderThread();
-    connectInbox();
     void refreshInbox();
-  } else disconnectInbox();
+  }
   if (user.role !== 'admin') return;
   if (view === 'workflow') {
     openDiagram(endSession);
@@ -459,17 +465,28 @@ byId('thread-back').addEventListener('click', () => {
 });
 
 const staffReply = byId('staff-reply');
+const staffUpload = attachmentPicker(staffReply);
 staffReply.addEventListener('submit', event => {
   event.preventDefault();
   if (!selectedChat || selectedChat.closedAt) return;
+  if (staffUpload.preparing) {
+    notice(officeNote, 'Tunggu lampiran selesai dikompres.');
+    return;
+  }
   void operate(staffReply.querySelector('[type="submit"]'), async () => {
     const message = byId('staff-message');
     message.readOnly = true;
+    sendingReply = true;
+    staffUpload.lock(true);
     try {
-      await postMessage(`/api/staff/chats/${selectedId}/message`, staffReply, { text: message.value });
+      await postMessage(`/api/staff/chats/${selectedId}/message`, staffReply, { text: message.value, attachment: staffUpload.file });
       staffReply.reset();
       scrollAfterSend = true;
-    } finally { message.readOnly = false; }
+    } finally {
+      message.readOnly = false;
+      sendingReply = false;
+      staffUpload.lock(false);
+    }
   });
 });
 
@@ -502,7 +519,12 @@ function newAgentRow(agent) {
   const row = element('li', 'agent-row');
   row.dataset.row = agent.id;
   const info = element('div', 'agent-info');
-  info.append(element('strong', '', agent.name), element('small'));
+  info.append(element('strong', '', agent.name), element('small', 'agent-meta'));
+  const avatar = element('img', 'roster-avatar');
+  avatar.src = '/assets/jrcare-agent.webp';
+  avatar.alt = '';
+  avatar.width = avatar.height = 40;
+  const presence = element('span', 'status-pill agent-online');
   const form = element('form', 'capacity-form');
   form.method = 'post';
   form.dataset.capacity = agent.id;
@@ -521,18 +543,25 @@ function newAgentRow(agent) {
   const reset = element('button', 'secondary small');
   reset.type = 'button';
   reset.dataset.agent = agent.id;
-  row.append(info, form, reset);
+  row.append(avatar, info, presence, form, reset);
   agentList.append(row);
   return row;
 }
 
 function renderAgents() {
+  const online = agents.filter(agent => agent.online).length;
+  const status = `${online} online · ${agents.length - online} offline`;
+  if (byId('team-presence').textContent !== status) byId('team-presence').textContent = status;
   const rows = new Map([...agentList.children].map(row => [Number(row.dataset.row), row]));
   for (const agent of agents) {
     const row = rows.get(agent.id) ?? newAgentRow(agent);
     rows.delete(agent.id);
-    const summary = row.querySelector('small');
-    const label = `${agent.username} · ${readiness(agent)} · ${agent.activeChats}/${agent.capacity} chat`;
+    const presence = row.querySelector('.agent-online');
+    presence.dataset.status = agent.online ? 'online' : 'offline';
+    presence.textContent = agent.online ? 'Online' : 'Offline';
+    const summary = row.querySelector('.agent-meta');
+    const state = readiness(agent);
+    const label = `${agent.username}${state === 'Offline' ? '' : ` · ${state}`} · ${agent.activeChats}/${agent.capacity} chat`;
     if (summary.textContent !== label) summary.textContent = label;
     const input = row.querySelector('input');
     const capacity = String(agent.capacity);
@@ -590,7 +619,7 @@ async function syncPresence(accepting) {
     lastPresence = presence;
     acceptingChats.checked = presence.accepting;
     const status = readiness(presence);
-    const label = `${status} · ${presence.activeChats}/${presence.capacity} chat`;
+    const label = `Online · ${status} · ${presence.activeChats}/${presence.capacity} chat`;
     if (presenceLabel.textContent !== label) presenceLabel.textContent = label;
     presenceLabel.dataset.ready = String(status === 'Siap');
   } catch (error) {
@@ -827,8 +856,7 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('pagehide', disconnectInbox);
 window.addEventListener('pageshow', event => {
-  if (event.persisted && user && !user.mustChangePassword && view === 'inbox') connectInbox();
+  if (event.persisted && user && !user.mustChangePassword && ['inbox', 'agents'].includes(view)) connectInbox();
 });
-setInterval(refreshTeam, 5_000);
 setInterval(syncPresence, 20_000);
 void loadSession();

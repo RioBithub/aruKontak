@@ -1,4 +1,6 @@
 const presenceLifetime = 90_000;
+const presentSession = `EXISTS (SELECT 1 FROM staff_sessions s JOIN agent_presence p ON p.token_hash = s.token_hash
+  WHERE s.user_id = u.id AND s.expires_at > ? AND p.present_at > ?)`;
 
 export function migrateRouting(db) {
   if (db.prepare('PRAGMA user_version').get().user_version >= 1) return;
@@ -48,12 +50,17 @@ export function agentStates(db, now = Date.now()) {
       CASE WHEN u.password_hash IS NULL THEN 'pending' WHEN u.temporary = 1 THEN 'temporary' ELSE 'active' END AS status,
       u.accepting_chats AS accepting, u.chat_capacity AS capacity, u.last_assignment_id AS lastAssignment,
       (SELECT count(*) FROM chats c WHERE c.assignee_id = u.id AND c.closed_at IS NULL) AS activeChats,
-      EXISTS (SELECT 1 FROM staff_sessions s JOIN agent_presence p ON p.token_hash = s.token_hash
-        WHERE s.user_id = u.id AND s.expires_at > ? AND p.present_at > ?) AS online
+      ${presentSession} AS online
     FROM users u WHERE u.role = 'agent' ORDER BY u.id`).all(now, now - presenceLifetime);
   return agents.map(agent => ({
     ...agent, accepting: Boolean(agent.accepting), online: agent.status === 'active' && Boolean(agent.online),
   }));
+}
+
+export function agentIsOnline(db, id, now = Date.now()) {
+  return Boolean(db.prepare(`SELECT ${presentSession} AS online FROM users u
+    WHERE u.id = ? AND u.role = 'agent' AND u.password_hash IS NOT NULL AND u.temporary = 0`)
+    .get(now, now - presenceLifetime, id)?.online);
 }
 
 export function assignmentEvents(db, chatId) {
