@@ -5,6 +5,7 @@ import { isIP } from 'node:net';
 import { parseArgs, promisify } from 'node:util';
 import { attachmentBytes, maxAttachmentRequest, prepareAttachment } from './attachments.mjs';
 import * as store from './store.mjs';
+import { queuePositions } from './routing.mjs';
 import { validateRules } from './rules.mjs';
 import { previewWorkflow, validateWorkflow } from './workflow.mjs';
 
@@ -43,6 +44,7 @@ const updatesAfter = db.prepare(`SELECT id, chat_id AS chatId, previous_agent_id
 const chatAgent = db.prepare('SELECT assignee_id AS id FROM chats WHERE id = ?');
 let lastPublishedAssignment = db.prepare('SELECT coalesce(max(id), 0) AS id FROM assignment_events').get().id;
 let presence = readPresence();
+let queue = queuePositions(db);
 
 const staticFiles = new Map([
   ['/', ['index.html', 'text/html']],
@@ -281,6 +283,13 @@ function publishUpdates(changedChats = new Set()) {
     agentIds.add(agentId);
   }
   if (!changedChats.size && !publicChanged && !teamChanged) return;
+  if (changedChats.size) {
+    const nextQueue = queuePositions(db);
+    for (const [id, position] of nextQueue) {
+      if (queue.get(id) !== position) changedChats.add(id);
+    }
+    queue = nextQueue;
+  }
   for (const { response, chatId, staffId, admin } of updateStreams) {
     if ((chatId && (changedChats.has(chatId) || publicChanged))
       || (admin && (changedChats.size || teamChanged)) || (staffId && agentIds.has(staffId))) writeUpdate(response, updateEvent);

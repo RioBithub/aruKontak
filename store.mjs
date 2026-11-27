@@ -3,7 +3,9 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { automationFor, defaultRules } from './rules.mjs';
-import { agentIsOnline, agentStates, assignmentEvents, migrateRouting, recordAssignment, routeWaitingChats, routingEnabled } from './routing.mjs';
+import {
+  agentIsOnline, agentStates, assignmentEvents, migrateRouting, queuePosition, recordAssignment, routeWaitingChats, routingEnabled,
+} from './routing.mjs';
 import { runWorkflow, twoMessageWorkflow, workflowChoices } from './workflow.mjs';
 
 const initialAgents = ['Igun', 'Meri', 'Lingga'];
@@ -410,6 +412,7 @@ function visitorThread(db, id) {
   }
   return {
     ...chat, botPending: Boolean(chat.botPending), canRestart: Boolean(chat.canRestart),
+    queuePosition: queuePosition(db, id),
     agentOnline: assigneeId ? agentIsOnline(db, assigneeId) : null, choices, messages: messagesFor(db, id),
   };
 }

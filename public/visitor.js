@@ -122,6 +122,11 @@ function render(forceScroll = false) {
     label = 'Mulai percakapan';
   }
   panel.dataset.state = state;
+  const queuePosition = chat?.queuePosition;
+  const queueLabel = queuePosition ? `Antrean nomor ${queuePosition}` : '';
+  byId('visitor-queue').hidden = !queuePosition;
+  const position = byId('visitor-queue-position');
+  if (position.textContent !== queueLabel) position.textContent = queueLabel;
   notice(byId('visitor-network'), connected || viewingHistory || chat?.closedAt ? ''
     : navigator.onLine ? 'Menyambungkan kembali ke chat…' : 'Internet Anda sedang offline. Chat akan tersambung kembali otomatis.');
   for (const button of topicButtons) button.disabled = submitting;

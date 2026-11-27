@@ -334,6 +334,18 @@ select {
 .chat-card[data-state='active'] .chat-card-header p::before { background: #168060; box-shadow: 0 0 0 .17rem #dcf3e9; }
 .chat-card[data-state='waiting'] .chat-card-header p::before { background: #b57d22; }
 .chat-face { width: 3.35rem; height: 3.35rem; flex: 0 0 auto; object-fit: contain; padding: .22rem; border-radius: 1rem; background: #e4f4fc; }
+.visitor-queue {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: .25rem .72rem;
+  padding: .65rem 1rem;
+  border-bottom: 1px solid #f4dfbc;
+  background: #fff7e8;
+  color: #67481e;
+  font-size: .875rem;
+}
+.visitor-queue strong { color: #754a12; }
 .start-form, .auth-card form, .form-stack { display: grid; gap: .65rem; }
 .start-form { flex: 1; padding: clamp(1.15rem, 2.6vw, 1.85rem); animation: arrive .28s ease-out both; }
 .start-form label:not(:first-child), .auth-card form label:not(:first-child) { margin-top: .33rem; }

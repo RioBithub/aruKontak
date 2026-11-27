@@ -30,7 +30,7 @@ Simpan hasil perintah sebagai `JRCARE_SETUP_TOKEN` di `.env`, lalu jalankan `npm
 
 Pengaturan awal mengaktifkan penugasan otomatis dengan kapasitas tiga chat aktif per agen. Agen mulai menerima chat setelah mengaktifkan akun dan membuka portal. Mereka bisa menjeda chat baru lewat **Terima chat otomatis** sambil tetap menangani chat yang sudah diterima. Admin bisa mengatur kapasitas 1–20 chat per agen dan menyalakan atau mematikan penugasan di **Akun agen**.
 
-Chat tertua di antrean diutamakan. JRCare memilih agen siap dengan rasio chat aktif terhadap kapasitas terendah. Jika rasionya sama, agen yang sudah paling lama tidak mendapat penugasan dipilih dulu. Chat menunggu jika semua agen jeda, offline, atau penuh.
+Chat tertua di antrean diutamakan. JRCare memilih agen siap dengan rasio chat aktif terhadap kapasitas terendah. Jika rasionya sama, agen yang sudah paling lama tidak mendapat penugasan dipilih dulu. Chat menunggu jika semua agen jeda, offline, atau penuh. Pelanggan melihat nomor antreannya selama menunggu penugasan, dan nomornya berubah otomatis saat posisi chat berubah.
 
 Jika portal tidak mengirim sinyal selama 90 detik, agen dianggap offline. Chat otomatis yang belum pernah mendapat balasan petugas kembali ke antrean. Chat yang sudah dijawab dan chat yang dipilih admin tetap di agen semula. Sistem memeriksa antrean setiap 15 detik dan langsung mengisinya saat agen siap atau slot terbuka. Admin dapat memilih **Tahan di antrean** untuk menahan satu chat dan **Antrean otomatis** untuk melepaskannya kembali.
 

@@ -50,6 +50,30 @@ test('distributes waiting chats in order, using capacity, active load and last a
   assert.equal(chat(chats[7]).assigneeId, igun.id);
 });
 
+test('shows each visitor their position only while their chat is eligible for routing', t => {
+  const { db, admin, igun, ready, chat } = desk(t);
+  store.updateCapacity(db, igun.id, 1);
+  ready(igun);
+  const chats = Array.from({ length: 4 }, (_, index) =>
+    store.startChat(db, `visitor-${index}`, 'Pengunjung Uji', 'Halo', 'start'));
+  const [active, held, reset, waiting] = chats;
+  const positions = () => chats.map(({ code }) => store.visitorChat(db, { code }).queuePosition);
+  assert.deepEqual(positions(), [null, null, null, null]);
+
+  for (const { id, code } of chats) store.postVisitorMessage(db, { code }, id, '1', 'choose');
+  assert.deepEqual(positions(), [null, 1, 2, 3]);
+  assert.equal(store.assignChat(db, admin, held.id, { agentId: null, hold: true }), 'ok');
+  assert.deepEqual(positions(), [null, null, 1, 2]);
+  assert.equal(store.restartVisitorTopic(db, { code: reset.code }, reset.id, 'restart'), 'ok');
+  assert.deepEqual(positions(), [null, null, null, 1]);
+
+  store.closeChat(db, igun, active.id);
+  assert.equal(chat(waiting.id).assigneeId, igun.id);
+  assert.deepEqual(positions(), [null, null, null, null]);
+  assert.equal(store.assignChat(db, admin, held.id, { agentId: null, hold: false }), 'ok');
+  assert.deepEqual(positions(), [null, 1, null, null]);
+});
+
 test('requeues unanswered automatic chats when an agent loses the last online session', t => {
   const { db, admin, igun, meri, ready, visitor, chat } = desk(t);
   ready(igun);

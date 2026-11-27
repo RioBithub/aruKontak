@@ -1,6 +1,7 @@
 const presenceLifetime = 90_000;
 const presentSession = `EXISTS (SELECT 1 FROM staff_sessions s JOIN agent_presence p ON p.token_hash = s.token_hash
   WHERE s.user_id = u.id AND s.expires_at > ? AND p.present_at > ?)`;
+const waitingChat = "closed_at IS NULL AND assignee_id IS NULL AND routing_state = 'queued' AND bot_pending = 0";
 
 export function migrateRouting(db) {
   if (db.prepare('PRAGMA user_version').get().user_version >= 1) return;
@@ -43,6 +44,16 @@ export function migrateRouting(db) {
 
 export function routingEnabled(db) {
   return Boolean(db.prepare('SELECT enabled FROM routing_settings WHERE id = 1').get().enabled);
+}
+
+export function queuePosition(db, id) {
+  return db.prepare(`SELECT CASE WHEN EXISTS (SELECT 1 FROM chats WHERE id = ? AND ${waitingChat})
+    THEN (SELECT count(*) FROM chats WHERE id <= ? AND ${waitingChat}) END AS position`).get(id, id).position;
+}
+
+export function queuePositions(db) {
+  const chats = db.prepare(`SELECT id FROM chats WHERE ${waitingChat} ORDER BY id`).all();
+  return new Map(chats.map(({ id }, index) => [id, index + 1]));
 }
 
 export function agentStates(db, now = Date.now()) {
@@ -98,7 +109,7 @@ export function routeWaitingChats(db, now = Date.now()) {
   const slots = ready.reduce((total, agent) => total + agent.capacity - agent.activeChats, 0);
   if (!slots) return;
   const waiting = db.prepare(`SELECT id, assignee_id AS assigneeId, preferred_agent_id AS preferredAgentId FROM chats
-    WHERE closed_at IS NULL AND assignee_id IS NULL AND routing_state = 'queued' AND bot_pending = 0
+    WHERE ${waitingChat}
     ORDER BY id LIMIT ?`).all(slots);
   for (const chat of waiting) {
     const agent = ready.find(item => item.id === chat.preferredAgentId)
